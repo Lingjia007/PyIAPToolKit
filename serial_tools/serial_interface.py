@@ -41,6 +41,9 @@ from qfluentwidgets import (
     TogglePushButton,
     StrongBodyLabel,
     ProgressRing,
+    TabBar,
+    TabCloseButtonDisplayMode,
+    TransparentToolButton,
 )
 
 import os
@@ -1554,6 +1557,116 @@ class Serial_Tools_Widget(QWidget):
                 duration=3000,
                 parent=self,
             )
+
+
+class SerialTabWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("serial_tab_widget")
+        self._tab_counter = 0
+        self._serial_instances = []
+
+        self.vBoxLayout = QVBoxLayout(self)
+        self.vBoxLayout.setContentsMargins(0, 0, 0, 0)
+        self.vBoxLayout.setSpacing(0)
+
+        tab_bar_layout = QHBoxLayout()
+        tab_bar_layout.setContentsMargins(8, 4, 8, 0)
+        tab_bar_layout.setSpacing(4)
+
+        self.tabBar = TabBar(self)
+        self.tabBar.setMovable(True)
+        self.tabBar.setTabMaximumWidth(200)
+        self.tabBar.setTabShadowEnabled(False)
+        self.tabBar.setCloseButtonDisplayMode(TabCloseButtonDisplayMode.ON_HOVER)
+        self.tabBar.tabCloseRequested.connect(self._on_tab_close_requested)
+        self.tabBar.currentChanged.connect(self._on_tab_changed)
+        self.tabBar.tabAddRequested.connect(self.add_serial_tab)
+        
+        self._update_tab_bar_color()
+        cfg.themeChanged.connect(self._update_tab_bar_color)
+        
+        tab_bar_layout.addWidget(self.tabBar, 1)
+
+        self.vBoxLayout.addLayout(tab_bar_layout)
+
+        self.stackedWidget = QStackedWidget(self)
+        self.vBoxLayout.addWidget(self.stackedWidget, 1)
+
+        self.add_serial_tab()
+
+    def _update_tab_bar_color(self):
+        from PyQt6.QtGui import QColor
+        from qfluentwidgets import isDarkTheme
+        if isDarkTheme():
+            self.tabBar.setTabSelectedBackgroundColor(QColor(255, 255, 255, 25), QColor(255, 255, 255, 13))
+        else:
+            self.tabBar.setTabSelectedBackgroundColor(QColor(249, 249, 249), QColor(240, 240, 240))
+
+    def add_serial_tab(self, port_name=None):
+        self._tab_counter += 1
+        tab_index = self._tab_counter
+
+        serial_widget = Serial_Tools_Widget()
+        self._serial_instances.append(serial_widget)
+
+        if port_name:
+            tab_label = f"串口-{port_name}"
+        else:
+            tab_label = f"串口 {tab_index}"
+
+        self.stackedWidget.addWidget(serial_widget)
+        self.tabBar.addTab(tab_label, f"serial_{tab_index}")
+
+        self.tabBar.setCurrentIndex(self.tabBar.count() - 1)
+        self.stackedWidget.setCurrentWidget(serial_widget)
+
+        serial_widget.serial_start_pushbutton.toggled.connect(
+            lambda checked, idx=tab_index, w=serial_widget: self._on_serial_toggled(checked, idx, w)
+        )
+
+        return serial_widget
+
+    def _on_serial_toggled(self, checked, tab_index, serial_widget):
+        if checked and serial_widget.serial_port and serial_widget.serial_port.is_open:
+            port_name = serial_widget.port_combo.currentText().split(":")[0].strip()
+            if port_name:
+                for i in range(self.tabBar.count()):
+                    if self.tabBar.tabData(i) == f"serial_{tab_index}":
+                        self.tabBar.setTabText(i, f"串口-{port_name}")
+                        break
+
+    def _on_tab_close_requested(self, index):
+        if self.tabBar.count() <= 1:
+            InfoBar.warning(
+                title="无法关闭",
+                content="至少需要保留一个串口标签页",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=2000,
+                parent=self,
+            )
+            return
+
+        serial_widget = self._serial_instances[index]
+        if serial_widget.serial_port is not None and serial_widget.serial_port.is_open:
+            serial_widget.serial_start_pushbutton.setChecked(False)
+
+        self.stackedWidget.removeWidget(serial_widget)
+        serial_widget.deleteLater()
+        self._serial_instances.pop(index)
+        self.tabBar.removeTab(index)
+
+    def _on_tab_changed(self, index):
+        if 0 <= index < len(self._serial_instances):
+            self.stackedWidget.setCurrentWidget(self._serial_instances[index])
+
+    def get_current_serial_widget(self):
+        index = self.tabBar.currentIndex()
+        if 0 <= index < len(self._serial_instances):
+            return self._serial_instances[index]
+        return None
 
 
 if __name__ == "__main__":

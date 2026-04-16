@@ -9,7 +9,7 @@ from qfluentwidgets import (NavigationItemPosition, MessageBox, setTheme, Theme,
                             NavigationAvatarWidget, SubtitleLabel, setFont, InfoBadge,
                             InfoBadgePosition, FluentTranslator, SplashScreen)
 from qfluentwidgets import FluentIcon as FIF
-from serial_tools.serial_interface import Serial_Tools_Widget
+from serial_tools.serial_interface import Serial_Tools_Widget, SerialTabWidget
 from pyocd_tools.pyocd_interface import Pyocd_Tools_Widget
 from aes_tools.aes_interface import AES_Tools_Widget
 from settings.setting_interface import SettingInterface
@@ -35,7 +35,7 @@ class Window(FluentWindow):
         super().__init__()
 
         self.homeInterface = Widget('Home Interface', self)
-        self.serialInterface = Serial_Tools_Widget()
+        self.serialInterface = SerialTabWidget()
         self.pyocdInterface = Pyocd_Tools_Widget()
         self.aesInterface = AES_Tools_Widget()
         self.settingInterface = SettingInterface(self)
