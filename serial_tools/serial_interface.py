@@ -677,6 +677,7 @@ class Serial_Tools_Widget(QWidget):
         self.send_bar_vBoxLayout.addLayout(send_area_hLayout)
 
         self._send_hex_mode = False
+        self._line_ending = ""
 
         self.send_bar_button_hLayout = QHBoxLayout()
 
@@ -704,6 +705,13 @@ class Serial_Tools_Widget(QWidget):
         self.send_bar_button_hLayout.addWidget(self.send_area_fontsize_spinBox)
 
         self.send_bar_button_hLayout.addStretch(1)
+
+        self.line_ending_combo = ComboBox()
+        self.line_ending_combo.addItems(["无", "\\n", "\\r", "\\r\\n"])
+        self.line_ending_combo.setCurrentIndex(3)
+        self.line_ending_combo.setFixedWidth(78)
+        self.line_ending_combo.currentIndexChanged.connect(self.on_line_ending_changed)
+        self.send_bar_button_hLayout.addWidget(self.line_ending_combo, 1)
 
         self.ymodem_send_button = PushButton(FIF.FOLDER, "YMODEM发送", self)
         self.ymodem_send_button.setFixedWidth(150)
@@ -1424,6 +1432,12 @@ class Serial_Tools_Widget(QWidget):
         mode = "Hex" if self._send_hex_mode else "文本"
         self.show_success_info_bar("发送格式：", f"已切换为{mode}发送", 1000)
 
+    def on_line_ending_changed(self, index):
+        line_endings = ["", "\n", "\r", "\r\n"]
+        self._line_ending = line_endings[index]
+        ending_name = ["无", "\\n", "\\r", "\\r\\n"][index]
+        self.show_success_info_bar("换行符：", f"已设置为追加{ending_name}", 1000)
+
     def clear_send_area(self):
         self.send_area_text.clear()
         self.show_success_info_bar("发送栏：", "已清空发送区", 1000)
@@ -1460,7 +1474,7 @@ class Serial_Tools_Widget(QWidget):
                     raise ValueError("Hex数据长度必须为偶数")
                 data = bytes.fromhex(hex_text)
             else:
-                data = text.encode('utf-8')
+                data = (text + self._line_ending).encode('utf-8')
             
             self.serial_port.write(data)
             self.send_area_text.add_to_history(text)
