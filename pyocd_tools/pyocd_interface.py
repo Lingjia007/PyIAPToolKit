@@ -203,7 +203,7 @@ class Pyocd_Program_Thread(QThread):
 
     def __init__(self, file_path, target=None, probe_uid=None, frequency=None, 
                  connect_mode=None, erase_mode=None, base_address=None, 
-                 trust_crc=False, no_reset=False, config=None, pack=None):
+                 trust_crc=False, no_reset=False, pre_reset=False, config=None, pack=None):
         super().__init__()
         self.file_path = file_path
         self.target = target
@@ -214,6 +214,7 @@ class Pyocd_Program_Thread(QThread):
         self.base_address = base_address
         self.trust_crc = trust_crc
         self.no_reset = no_reset
+        self.pre_reset = pre_reset
         self.config = config
         self.pack = pack
 
@@ -226,10 +227,8 @@ class Pyocd_Program_Thread(QThread):
         try:
             self.output_received.emit(f"正在连接目标设备...")
             
-            # 使用设置中的 CM pack 路径的父目录（包含所有 pack 的目录）
             pack_path = cfg.get(cfg.cmPackPath)
             if pack_path:
-                # 获取 pack 路径的父目录
                 parent_dir = os.path.dirname(pack_path)
                 if parent_dir and os.path.exists(parent_dir):
                     os.environ["CMSIS_PACK_ROOT"] = parent_dir
@@ -257,6 +256,18 @@ class Pyocd_Program_Thread(QThread):
             
             if self.connect_mode:
                 connect_kwargs['connect_mode'] = connect_mode_map.get(self.connect_mode, 'halt')
+            
+            if self.pre_reset:
+                self.output_received.emit("正在执行烧录前复位...")
+                try:
+                    temp_session = ConnectHelper.session_with_chosen_probe(**connect_kwargs)
+                    if temp_session:
+                        with temp_session:
+                            temp_target = temp_session.target
+                            temp_target.reset()
+                            self.output_received.emit("烧录前复位完成")
+                except Exception as e:
+                    self.output_received.emit(f"烧录前复位警告: {str(e)}")
             
             session = ConnectHelper.session_with_chosen_probe(**connect_kwargs)
             
@@ -506,6 +517,10 @@ class Pyocd_Tools_Widget(QWidget):
         self.trust_crc_checkbox = CheckBox("使用CRC检查")
         self.trust_crc_checkbox.stateChanged.connect(self.__onTrustCrcChanged)
         load_layout.addWidget(self.trust_crc_checkbox)
+
+        self.pre_reset_checkbox = CheckBox("烧录前复位")
+        self.pre_reset_checkbox.setChecked(True)
+        load_layout.addWidget(self.pre_reset_checkbox)
 
         self.no_reset_checkbox = CheckBox("烧录后不复位")
         load_layout.addWidget(self.no_reset_checkbox)
@@ -841,6 +856,7 @@ class Pyocd_Tools_Widget(QWidget):
         erase_mode = self.erase_combo.currentText()
         base_address = self.address_lineedit.text().strip() or None
         trust_crc = self.trust_crc_checkbox.isChecked()
+        pre_reset = self.pre_reset_checkbox.isChecked()
         no_reset = self.no_reset_checkbox.isChecked()
         config = self.config_lineedit.text().strip() or None
         pack = self.pack_lineedit.text().strip() or None
@@ -872,6 +888,7 @@ class Pyocd_Tools_Widget(QWidget):
             base_address=base_address,
             trust_crc=trust_crc,
             no_reset=no_reset,
+            pre_reset=pre_reset,
             config=config,
             pack=pack
         )
