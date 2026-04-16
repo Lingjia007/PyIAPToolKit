@@ -1,0 +1,53 @@
+{
+    "Update": {
+        "CheckUpdateAtStartUp": true
+    },
+    "CMPack": {
+        "PackPath": "C:/Users/31254/AppData/Local/cmsis-pack-manager/cmsis-pack-manager"
+    },
+    "DesktopLyric": {
+        "Alignment": "Center",
+        "FontFamily": "微软雅黑",
+        "FontSize": 50,
+        "HighlightColor": "#ff0099bc",
+        "StrokeColor": "#ff000000",
+        "StrokeSize": 17
+    },
+    "Folders": {
+        "Download": "C:/Users/31254/Downloads",
+        "LocalMusic": []
+    },
+    "MainWindow": {
+        "DpiScale": "Auto",
+        "EnableAcrylicBackground": false,
+        "Language": "Auto",
+        "MinimizeToTray": true,
+        "PlayBarColor": "#ff225c7f",
+        "RecentPlayNumbers": 300
+    },
+    "QFluentWidgets": {
+        "FontFamilies": [
+            "Segoe UI",
+            "Microsoft YaHei",
+            "PingFang SC"
+        ],
+        "ThemeColor": "#ff009faa",
+        "ThemeMode": "Dark"
+    },
+    "Online": {
+        "MvQuality": "Full HD",
+        "PageSize": 50,
+        "SongQuality": "Standard quality"
+    },
+    "PyOCD": {
+        "FirmwarePath": "D:/edgedownload/STM32F407VGT6_Bootloader/MDK-ARM/STM32F407VGT6_Bootloader/STM32F407VGT6_Bootloader.hex",
+        "TrustCrc": true
+    },
+    "SerialPort": {
+        "DtrState": false,
+        "FontFamily": "FiraMono Nerd Font",
+        "FontSize": 13,
+        "RtsState": false,
+        "SendFontSize": 13
+    }
+}
