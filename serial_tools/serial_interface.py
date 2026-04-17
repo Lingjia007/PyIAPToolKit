@@ -44,6 +44,8 @@ from qfluentwidgets import (
     TabBar,
     TabCloseButtonDisplayMode,
     TransparentToolButton,
+    ColorPickerButton,
+    isDarkTheme,
 )
 
 import os
@@ -203,6 +205,7 @@ class TerminalTextEdit(PlainTextEdit):
         self._terminal_mode = False
         self._use_pyte = True
         self._pyte_terminal = PyteTerminal(columns=120, rows=1000)
+        self._display_buffer = ""
         self._setup_font()
         self._setup_document()
 
@@ -234,7 +237,18 @@ class TerminalTextEdit(PlainTextEdit):
 
     def feed_data(self, data):
         if self._use_pyte and self._terminal_mode:
-            self._pyte_terminal.feed(data)
+            if isinstance(data, bytes):
+                try:
+                    text = data.decode('utf-8', errors='replace')
+                except:
+                    text = str(data)
+            else:
+                text = str(data)
+            
+            print(f"[DEBUG] feed_data 接收到数据: {repr(text[:100])}... (长度: {len(text)})")
+            self._display_buffer += text
+            print(f"[DEBUG] _display_buffer 当前长度: {len(self._display_buffer)}")
+            self._pyte_terminal.feed(text)
             self._update_display()
         else:
             cursor = self.textCursor()
@@ -244,14 +258,19 @@ class TerminalTextEdit(PlainTextEdit):
             self.ensureCursorVisible()
 
     def _update_display(self):
-        self.setPlainText(self._pyte_terminal.get_display())
+        display_text = self._display_buffer
+        current_text = self.toPlainText()
+        if display_text != current_text:
+            self.setPlainText(display_text)
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self.setTextCursor(cursor)
+        self.ensureCursorVisible()
 
     def clear_terminal(self):
         if self._use_pyte:
             self._pyte_terminal.clear()
+        self._display_buffer = ""
         self.clear()
 
     def paintEvent(self, event):
@@ -347,12 +366,15 @@ class Serial_Data_Reader_Thread(QThread):
 
     def _flush_buffer(self):
         if self._text_buffer:
+            print(f"[DEBUG-THREAD] 发射 data_received 信号, 长度: {len(self._text_buffer)}")
             self.data_received.emit(self._text_buffer)
             self._text_buffer = ""
         if self._raw_buffer:
+            print(f"[DEBUG-THREAD] 发射 raw_data_received 信号, 长度: {len(self._raw_buffer)}")
             self.raw_data_received.emit(self._raw_buffer)
             self._raw_buffer = b""
         if self._hex_buffer:
+            print(f"[DEBUG-THREAD] 发射 hex_data_received 信号, 长度: {len(self._hex_buffer)}")
             self.hex_data_received.emit(self._hex_buffer)
             self._hex_buffer = ""
 
@@ -365,10 +387,12 @@ class Serial_Data_Reader_Thread(QThread):
             try:
                 if self.serial_port.in_waiting > 0:
                     data = self.serial_port.read(self.serial_port.in_waiting)
+                    print(f"[DEBUG-THREAD] 读取到数据: {len(data)} 字节, 内容: {repr(data[:100])}")
                     self._raw_buffer += data
                     decoded_text = data.decode('utf-8', errors='replace')
                     decoded_text = decoded_text.replace('\r\n', '\n').replace('\r', '\n')
                     self._text_buffer += decoded_text
+                    print(f"[DEBUG-THREAD] 解码后文本: {repr(decoded_text[:100])}")
                     hex_data = data.hex()
                     if hex_data:
                         formatted_hex = " ".join(
@@ -483,6 +507,8 @@ class Serial_Tools_Widget(QWidget):
         
         self._load_config()
         self._update_left_panel_width()
+        
+        cfg.themeChanged.connect(self._on_theme_changed)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -494,6 +520,19 @@ class Serial_Tools_Widget(QWidget):
         if self.stackedWidget.currentWidget() == self.more_setting:
             self.more_setting.hide()
         QTimer.singleShot(250, self._update_left_panel_width)
+
+    def _on_theme_changed(self):
+        if isDarkTheme():
+            receive_color = cfg.get(cfg.serialReceiveTextColorDark)
+            send_color = cfg.get(cfg.serialSendTextColorDark)
+        else:
+            receive_color = cfg.get(cfg.serialReceiveTextColorLight)
+            send_color = cfg.get(cfg.serialSendTextColorLight)
+        
+        if hasattr(self, 'receive_color_button'):
+            self.receive_color_button.setColor(receive_color if receive_color.isValid() else QColor())
+        if hasattr(self, 'send_color_button'):
+            self.send_color_button.setColor(send_color if send_color.isValid() else QColor(0, 0, 255))
 
     def _update_left_panel_width(self):
         current_widget = self.stackedWidget.currentWidget()
@@ -677,7 +716,7 @@ class Serial_Tools_Widget(QWidget):
         self.send_bar_vBoxLayout.addLayout(send_area_hLayout)
 
         self._send_hex_mode = False
-        self._line_ending = ""
+        self._line_ending = "\r\n"  # 默认设置为 \r\n (ESP8266 标准)
 
         self.send_bar_button_hLayout = QHBoxLayout()
 
@@ -964,6 +1003,43 @@ class Serial_Tools_Widget(QWidget):
         font_hlayout.addStretch(1)
         more_setting_layout.addLayout(font_hlayout)
         
+        color_group_label = StrongBodyLabel("颜色设置")
+        more_setting_layout.addWidget(color_group_label)
+        
+        receive_color_hlayout = QHBoxLayout()
+        receive_color_label = BodyLabel("接收区颜色:")
+        receive_color_light = cfg.get(cfg.serialReceiveTextColorLight)
+        receive_color_dark = cfg.get(cfg.serialReceiveTextColorDark)
+        current_receive_color = receive_color_dark if isDarkTheme() else receive_color_light
+        self.receive_color_button = ColorPickerButton(
+            current_receive_color if current_receive_color.isValid() else QColor(),
+            '接收区颜色',
+            self,
+            enableAlpha=False
+        )
+        self.receive_color_button.colorChanged.connect(self.on_receive_color_changed)
+        receive_color_hlayout.addWidget(receive_color_label)
+        receive_color_hlayout.addStretch(1)
+        receive_color_hlayout.addWidget(self.receive_color_button)
+        more_setting_layout.addLayout(receive_color_hlayout)
+        
+        send_color_hlayout = QHBoxLayout()
+        send_color_label = BodyLabel("发送区颜色:")
+        send_color_light = cfg.get(cfg.serialSendTextColorLight)
+        send_color_dark = cfg.get(cfg.serialSendTextColorDark)
+        current_send_color = send_color_dark if isDarkTheme() else send_color_light
+        self.send_color_button = ColorPickerButton(
+            current_send_color if current_send_color.isValid() else QColor(0, 0, 255),
+            '发送区颜色',
+            self,
+            enableAlpha=False
+        )
+        self.send_color_button.colorChanged.connect(self.on_send_color_changed)
+        send_color_hlayout.addWidget(send_color_label)
+        send_color_hlayout.addStretch(1)
+        send_color_hlayout.addWidget(self.send_color_button)
+        more_setting_layout.addLayout(send_color_hlayout)
+        
         more_setting_layout.addStretch(1)
         self.more_setting.setLayout(more_setting_layout)
 
@@ -1009,6 +1085,24 @@ class Serial_Tools_Widget(QWidget):
             send_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferQuality)
             self.send_area_text.setFont(send_font)
             self.show_success_info_bar("字体设置：", f"已设置为 {font.family()}", 1000)
+
+    def on_receive_color_changed(self, color):
+        if isDarkTheme():
+            cfg.set(cfg.serialReceiveTextColorDark, color)
+        else:
+            cfg.set(cfg.serialReceiveTextColorLight, color)
+        color_text = color.name(QColor.NameFormat.HexRgb) if color.isValid() else "默认"
+        theme_text = "深色主题" if isDarkTheme() else "浅色主题"
+        self.show_success_info_bar("接收区颜色：", f"已为{theme_text}设置为 {color_text}", 1000)
+
+    def on_send_color_changed(self, color):
+        if isDarkTheme():
+            cfg.set(cfg.serialSendTextColorDark, color)
+        else:
+            cfg.set(cfg.serialSendTextColorLight, color)
+        color_text = color.name(QColor.NameFormat.HexRgb) if color.isValid() else "默认"
+        theme_text = "深色主题" if isDarkTheme() else "浅色主题"
+        self.show_success_info_bar("发送区颜色：", f"已为{theme_text}设置为 {color_text}", 1000)
 
     def update_checkBox_state(self, state=None):
         # 当前被触发的复选框
@@ -1068,8 +1162,10 @@ class Serial_Tools_Widget(QWidget):
     def send_terminal_data(self, data):
         if self.serial_port is not None and self.serial_port.is_open:
             try:
-                self.serial_port.write(data.encode('latin-1'))
+                bytes_sent = self.serial_port.write(data.encode('latin-1'))
+                print(f"[DEBUG-SEND] 发送数据: {repr(data)} ({bytes_sent} 字节)")
             except Exception as e:
+                print(f"[DEBUG-SEND] 发送失败: {e}")
                 InfoBar.error(
                     title="发送失败：",
                     content=str(e),
@@ -1219,31 +1315,66 @@ class Serial_Tools_Widget(QWidget):
             reset_button_and_close_serial()
 
     def on_text_data_received(self, text_data):
+        print(f"[DEBUG] on_text_data_received 被调用, terminal_mode={self.reception_area_text._terminal_mode}, 文本长度: {len(text_data)}, 内容: {repr(text_data[:100])}")
         if self.reception_area_text._terminal_mode:
+            print("[DEBUG] 终端模式，跳过 on_text_data_received")
             return
-        
+
         if not self._text_cleared:
             self.reception_area_text.clear()
             self._text_cleared = True
-        
+            print("[DEBUG] 清空接收区")
+
         display_text = text_data
         if self.timestamp_checkBox.isChecked():
             now = datetime.now()
             timestamp = now.strftime("%H:%M:%S.") + f"{now.microsecond // 1000:03d}"
             display_text = f"[{timestamp}] {text_data}"
+            print(f"[DEBUG] 添加时间戳: {timestamp}")
+
+        print(f"[DEBUG] 准备显示文本: {repr(display_text[:100])}")
+        
+        if isDarkTheme():
+            receive_color = cfg.get(cfg.serialReceiveTextColorDark)
+        else:
+            receive_color = cfg.get(cfg.serialReceiveTextColorLight)
         
         cursor = self.reception_area_text.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        cursor.insertText(display_text)
+        
+        if receive_color and receive_color.isValid():
+            char_format = QTextCharFormat()
+            char_format.setForeground(receive_color)
+            cursor.insertText(display_text, char_format)
+        else:
+            if isDarkTheme():
+                default_color = QColor(255, 255, 255)
+            else:
+                default_color = QColor(0, 0, 0)
+            
+            char_format = QTextCharFormat()
+            char_format.setForeground(default_color)
+            cursor.insertText(display_text, char_format)
+        
         self.reception_area_text.setTextCursor(cursor)
         self.reception_area_text.ensureCursorVisible()
+        print(f"[DEBUG] 文本已显示，当前接收区总长度: {len(self.reception_area_text.toPlainText())}")
 
     def on_raw_data_received(self, raw_data):
+        print(f"[DEBUG] on_raw_data_received 被调用, terminal_mode={self.reception_area_text._terminal_mode}, 数据长度: {len(raw_data)}")
         if self.reception_area_text._terminal_mode:
             if not self._text_cleared:
                 self.reception_area_text.clear_terminal()
                 self._text_cleared = True
-            self.reception_area_text.feed_data(raw_data)
+            if isinstance(raw_data, bytes):
+                try:
+                    text_data = raw_data.decode('utf-8', errors='replace')
+                except:
+                    text_data = str(raw_data)
+            else:
+                text_data = str(raw_data)
+            print(f"[DEBUG] 准备调用 feed_data, 文本数据: {repr(text_data[:100])}...")
+            self.reception_area_text.feed_data(text_data)
 
     def on_hex_data_received(self, hex_data):
         if not self._hex_cleared:
@@ -1476,13 +1607,43 @@ class Serial_Tools_Widget(QWidget):
             else:
                 data = (text + self._line_ending).encode('utf-8')
             
-            self.serial_port.write(data)
+            bytes_sent = self.serial_port.write(data)
+            print(f"[DEBUG-SEND] 非终端模式发送数据: {repr(data)} ({bytes_sent} 字节), 换行符设置: {repr(self._line_ending)}")
+            
+            if not self.reception_area_text._terminal_mode:
+                if isDarkTheme():
+                    send_color = cfg.get(cfg.serialSendTextColorDark)
+                else:
+                    send_color = cfg.get(cfg.serialSendTextColorLight)
+                
+                if send_color and send_color.isValid():
+                    if not self._text_cleared:
+                        self.reception_area_text.clear()
+                        self._text_cleared = True
+                    
+                    cursor = self.reception_area_text.textCursor()
+                    cursor.movePosition(QTextCursor.MoveOperation.End)
+                    
+                    char_format = QTextCharFormat()
+                    char_format.setForeground(send_color)
+                    
+                    display_text = text + "\n"
+                    if self.timestamp_checkBox.isChecked():
+                        now = datetime.now()
+                        timestamp = now.strftime("%H:%M:%S.") + f"{now.microsecond // 1000:03d}"
+                        display_text = f"[{timestamp}] {text}\n"
+                    
+                    cursor.insertText(display_text, char_format)
+                    self.reception_area_text.setTextCursor(cursor)
+                    self.reception_area_text.ensureCursorVisible()
+            
             self.send_area_text.add_to_history(text)
             self.show_success_info_bar("发送成功：", f"已发送 {len(data)} 字节", 1000)
             
             if self.auto_clear_checkbox.isChecked():
                 self.send_area_text.clear()
         except Exception as e:
+            print(f"[DEBUG-SEND] 发送失败: {e}")
             InfoBar.error(
                 title="发送失败：",
                 content=str(e),

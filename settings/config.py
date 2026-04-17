@@ -3,7 +3,7 @@ import os
 from enum import Enum
 
 from PyQt6.QtCore import Qt, QLocale
-from PyQt6.QtGui import QGuiApplication, QFont
+from PyQt6.QtGui import QGuiApplication, QFont, QColor
 from qfluentwidgets import (qconfig, QConfig, ConfigItem, OptionsConfigItem, BoolValidator,
                             ColorConfigItem, OptionsValidator, RangeConfigItem, RangeValidator,
                             FolderListValidator, EnumSerializer, FolderValidator, ConfigSerializer, __version__)
@@ -136,6 +136,14 @@ class Config(QConfig):
         "SerialPort", "RtsState", False, BoolValidator())
     serialSendFontSize = RangeConfigItem(
         "SerialPort", "SendFontSize", 10, RangeValidator(4, 100))
+    serialReceiveTextColorLight = ColorConfigItem(
+        "SerialPort", "ReceiveTextColorLight", QColor(0, 0, 0))
+    serialReceiveTextColorDark = ColorConfigItem(
+        "SerialPort", "ReceiveTextColorDark", QColor(255, 255, 255))
+    serialSendTextColorLight = ColorConfigItem(
+        "SerialPort", "SendTextColorLight", QColor(0, 0, 255))
+    serialSendTextColorDark = ColorConfigItem(
+        "SerialPort", "SendTextColorDark", QColor(0, 120, 255))
     
     # pyocd settings
     pyocdFirmwarePath = ConfigItem(

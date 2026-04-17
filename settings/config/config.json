@@ -47,7 +47,11 @@
         "DtrState": false,
         "FontFamily": "FiraMono Nerd Font",
         "FontSize": 13,
+        "ReceiveTextColorDark": "#ffffffff",
+        "ReceiveTextColorLight": "#ff000000",
         "RtsState": false,
-        "SendFontSize": 13
+        "SendFontSize": 13,
+        "SendTextColorDark": "#ff1effe5",
+        "SendTextColorLight": "#ff1696ff"
     }
 }
