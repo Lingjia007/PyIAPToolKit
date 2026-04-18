@@ -196,6 +196,35 @@ class PortComboBox(ComboBox):
         port_data = self.currentPortData()
         return port_data.split(" : ")[0] if " : " in port_data else port_data
 
+    def currentDescription(self):
+        port_data = self.currentPortData()
+        if " : " in port_data:
+            return port_data.split(" : ", 1)[1]
+        return ""
+
+
+def extract_debugger_info(description):
+    if not description:
+        return ""
+    
+    description_lower = description.lower()
+    
+    debugger_keywords = [
+        ("JLink", ["jlink"]),
+        ("STLink", ["stlink", "st-link"]),
+        ("DAPLink", ["daplink", "dap-link"]),
+        ("CMSIS-DAP", ["cmsis-dap", "cmsis dap"]),
+        ("UART", ["uart"]),
+        ("USB", ["usb"]),
+    ]
+    
+    for debugger_name, keywords in debugger_keywords:
+        for keyword in keywords:
+            if keyword in description_lower:
+                return f"[{debugger_name}]"
+    
+    return ""
+
 
 class TerminalTextEdit(PlainTextEdit):
     send_data = pyqtSignal(str)
@@ -1740,6 +1769,7 @@ class SerialTabWidget(QWidget):
         self.setObjectName("serial_tab_widget")
         self._tab_counter = 0
         self._serial_instances = []
+        self._used_ports = set()
 
         self.vBoxLayout = QVBoxLayout(self)
         self.vBoxLayout.setContentsMargins(0, 0, 0, 0)
@@ -1757,10 +1787,10 @@ class SerialTabWidget(QWidget):
         self.tabBar.tabCloseRequested.connect(self._on_tab_close_requested)
         self.tabBar.currentChanged.connect(self._on_tab_changed)
         self.tabBar.tabAddRequested.connect(self.add_serial_tab)
-        
+
         self._update_tab_bar_color()
         cfg.themeChanged.connect(self._update_tab_bar_color)
-        
+
         tab_bar_layout.addWidget(self.tabBar, 1)
 
         self.vBoxLayout.addLayout(tab_bar_layout)
@@ -1786,12 +1816,13 @@ class SerialTabWidget(QWidget):
         self._serial_instances.append(serial_widget)
 
         if port_name:
-            tab_label = f"串口-{port_name}"
+            tab_label = f"{port_name}"
+            self._used_ports.add(port_name)
         else:
-            tab_label = f"串口 {tab_index}"
+            tab_label = f"serial_{tab_index}"
 
         self.stackedWidget.addWidget(serial_widget)
-        self.tabBar.addTab(tab_label, f"serial_{tab_index}")
+        self.tabBar.insertTab(self.tabBar.count(), f"serial_{tab_index}", tab_label)
 
         self.tabBar.setCurrentIndex(self.tabBar.count() - 1)
         self.stackedWidget.setCurrentWidget(serial_widget)
@@ -1800,16 +1831,89 @@ class SerialTabWidget(QWidget):
             lambda checked, idx=tab_index, w=serial_widget: self._on_serial_toggled(checked, idx, w)
         )
 
+        serial_widget.port_combo.currentIndexChanged.connect(
+            lambda index, w=serial_widget, idx=tab_index: self._on_port_changed(w, idx)
+        )
+
+        if not port_name:
+            current_port = serial_widget.port_combo.currentText().strip()
+            if current_port:
+                print(f"[DEBUG] Initial port detected: {current_port}")
+                self._on_port_changed(serial_widget, tab_index)
+
         return serial_widget
 
+    def _on_port_changed(self, serial_widget, tab_index):
+        current_port = serial_widget.port_combo.currentText().strip()
+        description = serial_widget.port_combo.currentDescription()
+        debugger_info = extract_debugger_info(description)
+        
+        print(f"[DEBUG] _on_port_changed called: current_port={current_port}, debugger_info={debugger_info}, tab_index={tab_index}")
+        
+        if not current_port:
+            return
+
+        tab_name = f"{current_port} {debugger_info}".strip()
+        
+        route_key = f"serial_{tab_index}"
+        if route_key in self.tabBar.itemMap:
+            tab_item = self.tabBar.itemMap[route_key]
+            old_text = tab_item.text()
+            print(f"[DEBUG] Found tab: old_text={old_text}, tab_name={tab_name}")
+
+            is_duplicate = False
+            for key, item in self.tabBar.itemMap.items():
+                if key != route_key and item.text() == tab_name:
+                    is_duplicate = True
+                    print(f"[DEBUG] Duplicate found: tab {key} already has name {tab_name}")
+                    break
+
+            if not is_duplicate:
+                if old_text and old_text in self._used_ports:
+                    self._used_ports.remove(old_text)
+                self._used_ports.add(tab_name)
+                tab_item.setText(tab_name)
+                print(f"[DEBUG] Tab text updated: {old_text} -> {tab_name}")
+            else:
+                print(f"[DEBUG] Skipped update due to duplicate")
+
+    def _check_port_available(self, port_name):
+        for widget in self._serial_instances:
+            if widget.port_combo.currentText().strip() == port_name:
+                if widget.serial_port and widget.serial_port.is_open:
+                    return False
+        return True
+
     def _on_serial_toggled(self, checked, tab_index, serial_widget):
+        print(f"[DEBUG] _on_serial_toggled called: checked={checked}, tab_index={tab_index}")
+        
+        route_key = f"serial_{tab_index}"
+        if route_key not in self.tabBar.itemMap:
+            return
+            
+        tab_item = self.tabBar.itemMap[route_key]
+        
         if checked and serial_widget.serial_port and serial_widget.serial_port.is_open:
             port_name = serial_widget.port_combo.currentText().split(":")[0].strip()
+            description = serial_widget.port_combo.currentDescription()
+            debugger_info = extract_debugger_info(description)
+            tab_name = f"{port_name} {debugger_info}".strip()
+            
+            print(f"[DEBUG] Serial opened: port_name={port_name}, debugger_info={debugger_info}")
             if port_name:
-                for i in range(self.tabBar.count()):
-                    if self.tabBar.tabData(i) == f"serial_{tab_index}":
-                        self.tabBar.setTabText(i, f"串口-{port_name}")
-                        break
+                current_text = tab_item.text()
+                print(f"[DEBUG] Updating tab: {current_text} -> {tab_name}")
+                if current_text in self._used_ports:
+                    self._used_ports.remove(current_text)
+                self._used_ports.add(tab_name)
+                tab_item.setText(tab_name)
+        elif not checked:
+            print(f"[DEBUG] Serial closed")
+            current_text = tab_item.text()
+            print(f"[DEBUG] Resetting tab: {current_text} -> serial_{tab_index}")
+            if current_text and current_text in self._used_ports:
+                self._used_ports.remove(current_text)
+            tab_item.setText(f"serial_{tab_index}")
 
     def _on_tab_close_requested(self, index):
         if self.tabBar.count() <= 1:
@@ -1827,6 +1931,12 @@ class SerialTabWidget(QWidget):
         serial_widget = self._serial_instances[index]
         if serial_widget.serial_port is not None and serial_widget.serial_port.is_open:
             serial_widget.serial_start_pushbutton.setChecked(False)
+
+        if index < len(self.tabBar.items):
+            tab_item = self.tabBar.items[index]
+            tab_text = tab_item.text()
+            if tab_text in self._used_ports:
+                self._used_ports.remove(tab_text)
 
         self.stackedWidget.removeWidget(serial_widget)
         serial_widget.deleteLater()
