@@ -12,6 +12,7 @@ from qfluentwidgets import FluentIcon as FIF
 from serial_tools.serial_interface import Serial_Tools_Widget, SerialTabWidget
 from pyocd_tools.pyocd_interface import Pyocd_Tools_Widget
 from aes_tools.aes_interface import AES_Tools_Widget
+from bsdiff_tools.bsdiff_interface import BSDiff_Tools_Widget
 from settings.setting_interface import SettingInterface
 from settings.config import cfg, Language
 
@@ -38,6 +39,7 @@ class Window(FluentWindow):
         self.serialInterface = SerialTabWidget()
         self.pyocdInterface = Pyocd_Tools_Widget()
         self.aesInterface = AES_Tools_Widget()
+        self.bsdiffInterface = BSDiff_Tools_Widget()
         self.settingInterface = SettingInterface(self)
 
         self.initNavigation()
@@ -66,8 +68,9 @@ class Window(FluentWindow):
 
     def initNavigation(self):
         self.addSubInterface(self.serialInterface, FIF.DEVELOPER_TOOLS, 'Serial Port')
-        self.addSubInterface(self.pyocdInterface, FIF.DOWNLOAD, 'PyOCD烧录')
+        self.addSubInterface(self.pyocdInterface, FIF.DOWNLOAD, 'PyOCD烧录')    
         self.addSubInterface(self.aesInterface, FIF.FINGERPRINT, 'AES加密')
+        self.addSubInterface(self.bsdiffInterface, FIF.UPDATE, '差分升级')
         self.addSubInterface(self.homeInterface, FIF.HOME, 'Home')
 
         self.navigationInterface.addWidget(
