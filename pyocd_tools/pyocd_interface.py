@@ -363,6 +363,7 @@ class Pyocd_Tools_Widget(QWidget):
         self.probes_data = []
         self.targets_data = []
         self.last_probes_data = []  # 保存上次的调试器数据，用于比较变化
+        self._probe_placeholder_text = ""  # 跟踪probe_combo的placeholderText
         
         # 后台自动检查调试器
         self.probe_timer = QTimer(self)
@@ -453,6 +454,7 @@ class Pyocd_Tools_Widget(QWidget):
         probe_label = BodyLabel("调试器:")
         self.probe_combo = ComboBox()
         self.probe_combo.setPlaceholderText("请选择调试器")
+        self._probe_placeholder_text = "请选择调试器"
         self.probe_combo.setFixedWidth(120)
         probe_hlayout = QHBoxLayout()
         probe_hlayout.addWidget(probe_label)
@@ -654,6 +656,7 @@ class Pyocd_Tools_Widget(QWidget):
         
         if not probes:
             self.probe_combo.setPlaceholderText("未找到调试器")
+            self._probe_placeholder_text = "未找到调试器"
             InfoBar.warning(
                 title="扫描结果",
                 content="未找到连接的调试器",
@@ -684,7 +687,7 @@ class Pyocd_Tools_Widget(QWidget):
         has_change = False
         if len(self.last_probes_data) > 0:
             has_change = True
-        elif self.probe_combo.currentText() or self.probe_combo.placeholderText() != "扫描失败":
+        elif self.probe_combo.currentText() or self._probe_placeholder_text != "扫描失败":
             has_change = True
         
         if not has_change:
@@ -694,6 +697,7 @@ class Pyocd_Tools_Widget(QWidget):
         self.last_probes_data = []
         self.probe_combo.clear()
         self.probe_combo.setPlaceholderText("扫描失败")
+        self._probe_placeholder_text = "扫描失败"
         
         InfoBar.error(
             title="扫描失败",
