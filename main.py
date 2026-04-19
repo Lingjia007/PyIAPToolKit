@@ -69,10 +69,10 @@ class Window(FluentWindow):
         loop.exec()
 
     def initNavigation(self):
-        self.addSubInterface(self.serialInterface, FIF.DEVELOPER_TOOLS, 'Serial Port')
+        self.addSubInterface(self.serialInterface, FIF.DEVELOPER_TOOLS, '串口终端')
         self.addSubInterface(self.pyocdInterface, FIF.DOWNLOAD, 'PyOCD烧录')    
         self.addSubInterface(self.aesInterface, FIF.FINGERPRINT, 'AES加密')
-        self.addSubInterface(self.bsdiffInterface, FIF.UPDATE, '差分升级')
+        self.addSubInterface(self.bsdiffInterface, FIF.UPDATE, 'Bsdiff4')
         self.addSubInterface(self.hpatchliteInterface, FIF.ZIP_FOLDER, 'HPatchLite')
         self.addSubInterface(self.homeInterface, FIF.HOME, 'Home')
 

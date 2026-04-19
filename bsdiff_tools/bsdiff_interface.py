@@ -1,13 +1,14 @@
 # coding:utf-8
 import sys
 import os
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
     QFileDialog,
     QGroupBox,
+    QGraphicsOpacityEffect,
 )
 
 from qfluentwidgets import (
@@ -22,6 +23,7 @@ from qfluentwidgets import (
     PlainTextEdit,
     isDarkTheme,
     CardWidget,
+    ToolButton,
 )
 from settings.config import cfg
 
@@ -135,7 +137,7 @@ class BSDiff_Tools_Widget(QWidget):
         self._init_diff_generate_ui()
         self._init_diff_apply_ui()
         
-        self.Main_hLayout.addLayout(self.bsdiff_setting_vBoxLayout)
+        self.Main_hLayout.addLayout(self.bsdiff_setting_vBoxLayout, 1)
         self._init_output_bar_ui()
         
         self.diff_generate_thread = None
@@ -265,31 +267,69 @@ class BSDiff_Tools_Widget(QWidget):
         self.right_vBoxLayout.setSpacing(0)
         self.right_vBoxLayout.setContentsMargins(0, 0, 0, 0)
 
+        self.toggle_log_btn = ToolButton(FIF.RIGHT_ARROW, self)
+        self.toggle_log_btn.setFixedSize(24, 24)
+        self.toggle_log_btn.clicked.connect(self._toggle_log_panel)
+        
         self.output_bar_widget = QWidget()
         self.output_bar_vBoxLayout = QVBoxLayout(self.output_bar_widget)
+        self.output_bar_vBoxLayout.setContentsMargins(5, 0, 0, 0)
+
+        header_layout = QHBoxLayout()
+        header_label = BodyLabel("日志输出")
+        header_layout.addWidget(header_label)
+        header_layout.addStretch(1)
+        
+        self.clear_output_button = PushButton(FIF.DELETE, "清空", self)
+        self.clear_output_button.clicked.connect(self.clear_output)
+        header_layout.addWidget(self.clear_output_button)
+        
+        self.export_output_button = PushButton(FIF.SAVE, "导出", self)
+        self.export_output_button.clicked.connect(self.export_output)
+        header_layout.addWidget(self.export_output_button)
+        
+        self.output_bar_vBoxLayout.addLayout(header_layout)
 
         self.output_area_text = PlainTextEdit()
         self.output_area_text.setReadOnly(True)
         self.output_bar_vBoxLayout.addWidget(self.output_area_text)
 
-        self.output_bar_button_hLayout = QHBoxLayout()
+        self.right_vBoxLayout.addWidget(self.toggle_log_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.right_vBoxLayout.addWidget(self.output_bar_widget, 1)
+        self.Main_hLayout.addLayout(self.right_vBoxLayout, 0)
+        
+        self.log_visible = True
+        self.target_log_width = 350
+        self.output_bar_widget.setFixedWidth(self.target_log_width)
+        
+        self.opacity_effect = QGraphicsOpacityEffect(self.output_bar_widget)
+        self.output_bar_widget.setGraphicsEffect(self.opacity_effect)
+        self.opacity_effect.setOpacity(1.0)
+        
+        self.opacity_animation = None
 
-        self.clear_output_button = PushButton(FIF.DELETE, "清空输出", self)
-        self.clear_output_button.clicked.connect(self.clear_output)
-        self.output_bar_button_hLayout.addWidget(self.clear_output_button)
-
-        self.output_bar_button_hLayout.addStretch(1)
-
-        self.export_output_button = PushButton(FIF.SAVE, "导出输出", self)
-        self.export_output_button.clicked.connect(self.export_output)
-        self.output_bar_button_hLayout.addWidget(self.export_output_button)
-
-        self.output_bar_vBoxLayout.addLayout(self.output_bar_button_hLayout)
-        self.output_bar_vBoxLayout.setSpacing(10)
-        self.output_bar_vBoxLayout.setContentsMargins(0, 0, 0, 9)
-
-        self.right_vBoxLayout.addWidget(self.output_bar_widget, 5)
-        self.Main_hLayout.addLayout(self.right_vBoxLayout, 1)
+    def _toggle_log_panel(self):
+        self.log_visible = not self.log_visible
+        
+        if self.opacity_animation:
+            self.opacity_animation.stop()
+        
+        self.opacity_animation = QPropertyAnimation(self.opacity_effect, b"opacity")
+        self.opacity_animation.setDuration(150)
+        self.opacity_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        
+        if self.log_visible:
+            self.toggle_log_btn.setIcon(FIF.RIGHT_ARROW)
+            self.output_bar_widget.setFixedWidth(self.target_log_width)
+            self.opacity_animation.setStartValue(0.0)
+            self.opacity_animation.setEndValue(1.0)
+        else:
+            self.toggle_log_btn.setIcon(FIF.LEFT_ARROW)
+            self.opacity_animation.setStartValue(1.0)
+            self.opacity_animation.setEndValue(0.0)
+            self.opacity_animation.finished.connect(lambda: self.output_bar_widget.setFixedWidth(0))
+        
+        self.opacity_animation.start()
 
     def __updateTheme(self):
         is_dark = isDarkTheme()
