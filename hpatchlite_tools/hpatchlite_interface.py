@@ -570,11 +570,11 @@ class HPatchLite_Tools_Widget(QWidget):
 
     def _select_diff_file(self):
         file_path, _ = QFileDialog.getSaveFileName(
-            self, "选择差分包保存路径", "", "差分包文件 (*.diff *.patch *.hdiff);;所有文件 (*)"
+            self, "选择差分包保存路径", "", "差分包文件 (*.hdiff *.diff *.patch);;所有文件 (*)"
         )
         if file_path:
-            if not file_path.endswith(('.diff', '.patch', '.hdiff')):
-                file_path += '.diff'
+            if not file_path.endswith(('.hdiff', '.diff', '.patch')):
+                file_path += '.hdiff'
             self.diff_file_edit.setText(file_path)
             self.log(f"差分包将保存到: {file_path}")
 
