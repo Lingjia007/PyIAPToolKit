@@ -294,8 +294,8 @@ class HPatchLite_Tools_Widget(QWidget):
         
         dict_label = BodyLabel("字典:")
         self.dict_combo = ComboBox()
-        self.dict_combo.addItems(["默认", "4k", "8k", "16k", "32k", "64k", "128k", "256k", "512k", "1m", "2m", "4m"])
-        self.dict_combo.setCurrentIndex(0)
+        self.dict_combo.addItems(["默认","1k", "4k", "8k", "16k", "32k", "64k", "128k", "256k", "512k", "1m", "2m", "4m"])
+        self.dict_combo.setCurrentIndex(2)
         self.dict_combo.setFixedWidth(100)
         
         compress_layout.addWidget(compress_label)
