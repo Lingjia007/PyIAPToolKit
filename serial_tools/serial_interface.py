@@ -56,7 +56,15 @@ from ymodem.Socket import ModemSocket
 
 
 class PyteTerminal:
-    def __init__(self, columns=80, rows=24):
+    _color_cache = {}
+    _standard_colors = [
+        '#000000', '#cd0000', '#00cd00', '#cdcd00',
+        '#0000ee', '#cd00cd', '#00cdcd', '#e5e5e5',
+        '#7f7f7f', '#ff0000', '#00ff00', '#ffff00',
+        '#5c5cff', '#ff00ff', '#00ffff', '#ffffff'
+    ]
+    
+    def __init__(self, columns=120, rows=500):
         self.columns = columns
         self.rows = rows
         self.screen = pyte.Screen(columns, rows)
@@ -82,16 +90,28 @@ class PyteTerminal:
     
     def get_formatted_lines(self):
         formatted_lines = []
+        cursor_x = self.screen.cursor.x
+        cursor_y = self.screen.cursor.y
+        buffer = self.screen.buffer
+        last_content_line = -1
+        
         for y in range(self.rows):
             line_segments = []
-            current_text = ""
+            current_text = []
             current_fg = None
             current_bg = None
             current_bold = False
             current_underline = False
+            has_content = False
             
+            row = buffer[y]
             for x in range(self.columns):
-                char = self.screen.buffer[y][x]
+                char = row[x]
+                char_data = char.data if char.data else " "
+                
+                if char_data != " ":
+                    has_content = True
+                
                 fg = self._color_to_hex(char.fg) if char.fg != "default" else None
                 bg = self._color_to_hex(char.bg) if char.bg != "default" else None
                 bold = char.bold if hasattr(char, 'bold') else False
@@ -101,58 +121,88 @@ class PyteTerminal:
                     bold != current_bold or underline != current_underline):
                     if current_text:
                         line_segments.append({
-                            'text': current_text,
+                            'text': ''.join(current_text),
                             'fg': current_fg,
                             'bg': current_bg,
                             'bold': current_bold,
                             'underline': current_underline
                         })
-                    current_text = char.data if char.data else " "
+                    current_text = [char_data]
                     current_fg = fg
                     current_bg = bg
                     current_bold = bold
                     current_underline = underline
                 else:
-                    current_text += char.data if char.data else " "
+                    current_text.append(char_data)
             
             if current_text:
-                line_segments.append({
-                    'text': current_text.rstrip(),
-                    'fg': current_fg,
-                    'bg': current_bg,
-                    'bold': current_bold,
-                    'underline': current_underline
-                })
+                text = ''.join(current_text)
+                if y == cursor_y:
+                    text = text[:cursor_x] if cursor_x <= len(text) else text
+                    if text:
+                        line_segments.append({
+                            'text': text,
+                            'fg': current_fg,
+                            'bg': current_bg,
+                            'bold': current_bold,
+                            'underline': current_underline
+                        })
+                elif has_content:
+                    text = text.rstrip()
+                    if text:
+                        line_segments.append({
+                            'text': text,
+                            'fg': current_fg,
+                            'bg': current_bg,
+                            'bold': current_bold,
+                            'underline': current_underline
+                        })
             
             if line_segments:
-                formatted_lines.append({'y': y, 'segments': line_segments})
+                last_content_line = y
+                formatted_lines.append({'y': y, 'segments': line_segments, 'is_cursor_line': y == cursor_y})
         
         return formatted_lines
     
-    def _color_to_hex(self, color):
-        color_map = {
-            'black': '#000000',
-            'red': '#cd0000',
-            'green': '#00cd00',
-            'brown': '#cdcd00',
-            'blue': '#0000ee',
-            'magenta': '#cd00cd',
-            'cyan': '#00cdcd',
-            'white': '#e5e5e5',
-            'brightblack': '#7f7f7f',
-            'brightred': '#ff0000',
-            'brightgreen': '#00ff00',
-            'brightyellow': '#ffff00',
-            'brightblue': '#5c5cff',
-            'brightmagenta': '#ff00ff',
-            'brightcyan': '#00ffff',
-            'brightwhite': '#ffffff',
-        }
-        if isinstance(color, str):
-            return color_map.get(color.lower(), color)
+    @classmethod
+    def _color_to_hex(cls, color):
+        if color in cls._color_cache:
+            return cls._color_cache[color]
+        
+        result = None
+        if color == 'default':
+            result = None
+        elif isinstance(color, str):
+            color_map = {
+                'black': '#000000', 'red': '#cd0000', 'green': '#00cd00',
+                'brown': '#cdcd00', 'blue': '#0000ee', 'magenta': '#cd00cd',
+                'cyan': '#00cdcd', 'white': '#e5e5e5', 'brightblack': '#7f7f7f',
+                'brightred': '#ff0000', 'brightgreen': '#00ff00', 'brightyellow': '#ffff00',
+                'brightblue': '#5c5cff', 'brightmagenta': '#ff00ff', 'brightcyan': '#00ffff',
+                'brightwhite': '#ffffff',
+            }
+            result = color_map.get(color.lower(), color)
         elif isinstance(color, tuple) and len(color) == 3:
-            return f'#{color[0]:02x}{color[1]:02x}{color[2]:02x}'
-        return None
+            r, g, b = color
+            result = f'#{int(r):02x}{int(g):02x}{int(b):02x}'
+        elif isinstance(color, int):
+            if 0 <= color <= 15:
+                result = cls._standard_colors[color]
+            elif 16 <= color <= 231:
+                color -= 16
+                r = (color // 36) % 6
+                g = (color // 6) % 6
+                b = color % 6
+                r = 0 if r == 0 else 55 + r * 40
+                g = 0 if g == 0 else 55 + g * 40
+                b = 0 if b == 0 else 55 + b * 40
+                result = f'#{r:02x}{g:02x}{b:02x}'
+            elif 232 <= color <= 255:
+                gray = 8 + (color - 232) * 10
+                result = f'#{gray:02x}{gray:02x}{gray:02x}'
+        
+        cls._color_cache[color] = result
+        return result
     
     def get_cursor_position(self):
         return (self.screen.cursor.x, self.screen.cursor.y)
@@ -228,15 +278,25 @@ def extract_debugger_info(description):
 
 class TerminalTextEdit(PlainTextEdit):
     send_data = pyqtSignal(str)
+    _format_cache = {}
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._terminal_mode = False
         self._use_pyte = True
-        self._pyte_terminal = PyteTerminal(columns=120, rows=1000)
+        self._pyte_terminal = PyteTerminal(columns=120, rows=500)
         self._display_buffer = ""
+        self._last_line_count = 0
+        self._update_pending = False
+        self._default_fg_color = None
         self._setup_font()
         self._setup_document()
+        
+        self._current_command = ""
+        self._sent_commands = []
+        self._command_start_positions = []
+        self._send_color = QColor(0, 0, 255)
+        self._msh_prompt_detected = False
 
     def _setup_font(self):
         font = QFont("FiraMono Nerd Font", 10)
@@ -248,6 +308,7 @@ class TerminalTextEdit(PlainTextEdit):
     def _setup_document(self):
         doc = self.document()
         doc.setDocumentMargin(2)
+        self._default_fg_color = QColor('#ffffff') if isDarkTheme() else QColor('#000000')
 
     def set_terminal_mode(self, enabled):
         self._terminal_mode = enabled
@@ -274,11 +335,13 @@ class TerminalTextEdit(PlainTextEdit):
             else:
                 text = str(data)
             
-            print(f"[DEBUG] feed_data 接收到数据: {repr(text[:100])}... (长度: {len(text)})")
             self._display_buffer += text
-            print(f"[DEBUG] _display_buffer 当前长度: {len(self._display_buffer)}")
             self._pyte_terminal.feed(text)
-            self._update_display()
+            
+            if "msh >" in text or "msh>" in text:
+                self._msh_prompt_detected = True
+            
+            self._schedule_update()
         else:
             cursor = self.textCursor()
             cursor.movePosition(QTextCursor.MoveOperation.End)
@@ -286,13 +349,82 @@ class TerminalTextEdit(PlainTextEdit):
             self.setTextCursor(cursor)
             self.ensureCursorVisible()
 
+    def _schedule_update(self):
+        if not self._update_pending:
+            self._update_pending = True
+            QTimer.singleShot(5, self._do_update)
+
+    def _do_update(self):
+        self._update_pending = False
+        self._update_display()
+
+    def _get_char_format(self, fg, bg, bold, underline):
+        cache_key = (fg, bg, bold, underline)
+        if cache_key in self._format_cache:
+            return self._format_cache[cache_key]
+        
+        char_format = QTextCharFormat()
+        
+        if fg:
+            char_format.setForeground(QColor(fg))
+        else:
+            char_format.setForeground(self._default_fg_color)
+        
+        if bg:
+            char_format.setBackground(QColor(bg))
+        
+        if bold:
+            char_format.setFontWeight(QFont.Weight.Bold)
+        
+        if underline:
+            char_format.setFontUnderline(True)
+        
+        self._format_cache[cache_key] = char_format
+        return char_format
+
     def _update_display(self):
-        display_text = self._display_buffer
-        current_text = self.toPlainText()
-        if display_text != current_text:
-            self.setPlainText(display_text)
+        formatted_lines = self._pyte_terminal.get_formatted_lines()
+        
+        if not formatted_lines:
+            return
+        
         cursor = self.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.beginEditBlock()
+        cursor.select(QTextCursor.SelectionType.Document)
+        cursor.removeSelectedText()
+        
+        first_line = True
+        for line_info in formatted_lines:
+            if not first_line:
+                cursor.insertText('\n')
+            first_line = False
+            
+            for segment in line_info['segments']:
+                text = segment['text']
+                if not text:
+                    continue
+                
+                use_send_color = False
+                if self._msh_prompt_detected and self._sent_commands:
+                    for cmd in self._sent_commands:
+                        if cmd in text:
+                            use_send_color = True
+                            break
+                
+                if use_send_color:
+                    char_format = QTextCharFormat()
+                    char_format.setForeground(self._send_color)
+                    cursor.insertText(text, char_format)
+                else:
+                    char_format = self._get_char_format(
+                        segment.get('fg'),
+                        segment.get('bg'),
+                        segment.get('bold', False),
+                        segment.get('underline', False)
+                    )
+                    cursor.insertText(text, char_format)
+        
+        cursor.endEditBlock()
         self.setTextCursor(cursor)
         self.ensureCursorVisible()
 
@@ -300,7 +432,15 @@ class TerminalTextEdit(PlainTextEdit):
         if self._use_pyte:
             self._pyte_terminal.clear()
         self._display_buffer = ""
+        self._last_line_count = 0
+        self._current_command = ""
+        self._sent_commands = []
+        self._command_start_positions = []
+        self._msh_prompt_detected = False
         self.clear()
+    
+    def set_send_color(self, color):
+        self._send_color = color
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -317,16 +457,29 @@ class TerminalTextEdit(PlainTextEdit):
     def keyPressEvent(self, event: QKeyEvent):
         if self._terminal_mode:
             if event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
+                if self._current_command.strip():
+                    self._sent_commands.append(self._current_command.strip())
+                    cursor_pos = self._pyte_terminal.get_cursor_position()
+                    self._command_start_positions.append({
+                        'command': self._current_command.strip(),
+                        'y': cursor_pos[1]
+                    })
+                self._current_command = ""
                 self.send_data.emit("\r")
                 return
             elif event.key() == Qt.Key.Key_Backspace:
+                if self._current_command:
+                    self._current_command = self._current_command[:-1]
                 self.send_data.emit("\x7f")
                 return
             elif event.key() == Qt.Key.Key_Delete:
+                if self._current_command:
+                    self._current_command = self._current_command[:-1]
                 self.send_data.emit("\x7f")
                 return
             text = event.text()
             if text:
+                self._current_command += text
                 self.send_data.emit(text)
                 return
         super().keyPressEvent(event)
@@ -562,6 +715,11 @@ class Serial_Tools_Widget(QWidget):
             self.receive_color_button.setColor(receive_color if receive_color.isValid() else QColor())
         if hasattr(self, 'send_color_button'):
             self.send_color_button.setColor(send_color if send_color.isValid() else QColor(0, 0, 255))
+        
+        if send_color and send_color.isValid():
+            self.reception_area_text.set_send_color(send_color)
+        else:
+            self.reception_area_text.set_send_color(QColor(0, 0, 255))
 
     def _update_left_panel_width(self):
         current_widget = self.stackedWidget.currentWidget()
@@ -1084,6 +1242,16 @@ class Serial_Tools_Widget(QWidget):
         send_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferQuality)
         self.send_area_text.setFont(send_font)
         self.send_area_fontsize_spinBox.setValue(cfg.get(cfg.serialSendFontSize))
+        
+        if isDarkTheme():
+            send_color = cfg.get(cfg.serialSendTextColorDark)
+        else:
+            send_color = cfg.get(cfg.serialSendTextColorLight)
+        
+        if send_color and send_color.isValid():
+            self.reception_area_text.set_send_color(send_color)
+        else:
+            self.reception_area_text.set_send_color(QColor(0, 0, 255))
 
     def on_dtr_changed(self, checked):
         cfg.set(cfg.serialDtrState, checked)
@@ -1129,6 +1297,12 @@ class Serial_Tools_Widget(QWidget):
             cfg.set(cfg.serialSendTextColorDark, color)
         else:
             cfg.set(cfg.serialSendTextColorLight, color)
+        
+        if color.isValid():
+            self.reception_area_text.set_send_color(color)
+        else:
+            self.reception_area_text.set_send_color(QColor(0, 0, 255))
+        
         color_text = color.name(QColor.NameFormat.HexRgb) if color.isValid() else "默认"
         theme_text = "深色主题" if isDarkTheme() else "浅色主题"
         self.show_success_info_bar("发送区颜色：", f"已为{theme_text}设置为 {color_text}", 1000)
