@@ -14,6 +14,8 @@ from pyocd_tools.pyocd_interface import Pyocd_Tools_Widget
 from aes_tools.aes_interface import AES_Tools_Widget
 from bsdiff_tools.bsdiff_interface import BSDiff_Tools_Widget
 from hpatchlite_tools.hpatchlite_interface import HPatchLite_Tools_Widget
+from firmware_header_tools.header_interface import FirmwareHeader_Widget
+from ed25519_tools.ed25519_interface import Ed25519_Widget
 from settings.setting_interface import SettingInterface
 from settings.config import cfg, Language
 
@@ -42,6 +44,8 @@ class Window(FluentWindow):
         self.aesInterface = AES_Tools_Widget()
         self.bsdiffInterface = BSDiff_Tools_Widget()
         self.hpatchliteInterface = HPatchLite_Tools_Widget()
+        self.firmwareHeaderInterface = FirmwareHeader_Widget()
+        self.ed25519Interface = Ed25519_Widget()
         self.settingInterface = SettingInterface(self)
 
         self.initNavigation()
@@ -74,6 +78,8 @@ class Window(FluentWindow):
         self.addSubInterface(self.aesInterface, FIF.FINGERPRINT, 'AES加密')
         self.addSubInterface(self.bsdiffInterface, FIF.UPDATE, 'Bsdiff4')
         self.addSubInterface(self.hpatchliteInterface, FIF.ZIP_FOLDER, 'HPatchLite')
+        self.addSubInterface(self.firmwareHeaderInterface, FIF.EDIT, '镜像头部编辑')
+        self.addSubInterface(self.ed25519Interface, FIF.CERTIFICATE, 'Ed25519签名')
         self.addSubInterface(self.homeInterface, FIF.HOME, 'Home')
 
         self.navigationInterface.addWidget(
