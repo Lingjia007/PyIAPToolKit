@@ -34,6 +34,7 @@ from settings.config import cfg
 try:
     from Crypto.PublicKey import ECC
     from Crypto.Signature import eddsa
+    from Crypto.Hash import SHA512
     CRYPTO_AVAILABLE = True
 except ImportError:
     CRYPTO_AVAILABLE = False
@@ -65,22 +66,30 @@ class SignThread(QThread):
             with open(self.file_path, 'rb') as f:
                 data = f.read()
             
-            self.progress_updated.emit(60)
+            self.progress_updated.emit(50)
+            
+            hash_obj = SHA512.new(data)
+            hash_bytes = hash_obj.digest()
+            
+            self.progress_updated.emit(70)
             
             signer = eddsa.new(private_key, 'rfc8032')
-            signature = signer.sign(data)
+            signature = signer.sign(hash_bytes)
             
-            self.progress_updated.emit(80)
+            self.progress_updated.emit(90)
             
             if self.output_path is None:
-                self.output_path = self.file_path + ".sig"
+                dir_path = os.path.dirname(self.file_path)
+                file_name = os.path.basename(self.file_path)
+                name_without_ext = file_name.split('.')[0]
+                self.output_path = os.path.join(dir_path, name_without_ext + ".sig")
             
             with open(self.output_path, 'wb') as f:
                 f.write(signature)
             
             self.progress_updated.emit(100)
             
-            self.sign_completed.emit(True, f"签名成功！\n签名文件: {self.output_path}\n签名长度: {len(signature)} 字节")
+            self.sign_completed.emit(True, f"签名成功！\n签名文件: {self.output_path}\n签名长度: {len(signature)} 字节\nSHA-512哈希: {hash_bytes.hex()[:32]}...")
             
         except Exception as e:
             self.error_occurred.emit(f"签名失败: {str(e)}")
@@ -125,14 +134,19 @@ class VerifyThread(QThread):
             with open(self.file_path, 'rb') as f:
                 data = f.read()
             
-            self.progress_updated.emit(80)
+            self.progress_updated.emit(70)
+            
+            hash_obj = SHA512.new(data)
+            hash_bytes = hash_obj.digest()
+            
+            self.progress_updated.emit(90)
             
             verifier = eddsa.new(public_key, 'rfc8032')
-            verifier.verify(data, signature)
+            verifier.verify(hash_bytes, signature)
             
             self.progress_updated.emit(100)
             
-            self.verify_completed.emit(True, "签名验证成功！\n文件完整性验证通过，签名有效。")
+            self.verify_completed.emit(True, "签名验证成功！\n文件完整性验证通过，签名有效。\nSHA-512哈希: " + hash_bytes.hex()[:32] + "...")
             
         except ValueError:
             self.error_occurred.emit("签名验证失败！\n签名无效或文件已被篡改。")
@@ -423,9 +437,17 @@ class Ed25519_Widget(QWidget):
             self.private_key_lineedit.setText(private_hex)
             self.public_key_lineedit.setText(self.public_key_bytes.hex())
             
+            public_hex = self.public_key_bytes.hex()
+            private_c_array = ', '.join([f'0x{private_hex[i:i+2]}' for i in range(0, 64, 2)])
+            public_c_array = ', '.join([f'0x{public_hex[i:i+2]}' for i in range(0, 64, 2)])
+            
             self._log("Ed25519密钥对生成成功:")
             self._log(f"私钥: {private_hex}")
-            self._log(f"公钥: {self.public_key_bytes.hex()}")
+            self._log(f"公钥: {public_hex}")
+            self._log("")
+            self._log("C数组格式:")
+            self._log(f"私钥: {{{private_c_array}}}")
+            self._log(f"公钥: {{{public_c_array}}}")
             
             InfoBar.success(
                 title="密钥生成成功",
