@@ -106,7 +106,7 @@ class Window(FluentWindow):
     def initWindow(self):
         self.resize(1055, 745)
         self.setWindowIcon(QIcon('settings/resource/images/logo.png'))
-        self.setWindowTitle('IAP Host Computer')
+        self.setWindowTitle('PyIAPToolKit')
 
         from PyQt6.QtGui import QGuiApplication
         screen = QGuiApplication.primaryScreen()

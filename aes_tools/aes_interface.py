@@ -29,11 +29,28 @@ from settings.config import cfg
 try:
     from Crypto.Cipher import AES
     from Crypto.Util.Padding import pad, unpad
-    from Crypto.Protocol.KDF import HKDF
-    from Crypto.Hash import SHA256
+    from Crypto.Hash import SHA256, HMAC
     CRYPTO_AVAILABLE = True
 except ImportError:
     CRYPTO_AVAILABLE = False
+
+
+def hkdf_extract(salt: bytes, ikm: bytes) -> bytes:
+    prk = HMAC.new(salt, ikm, digestmod=SHA256).digest()
+    return prk
+
+
+def hkdf_expand(prk: bytes, info: bytes, length: int) -> bytes:
+    hash_len = SHA256.digest_size
+    n = (length + hash_len - 1) // hash_len
+    
+    okm = b''
+    t = b''
+    for i in range(1, n + 1):
+        t = HMAC.new(prk, t + info + bytes([i]), digestmod=SHA256).digest()
+        okm += t
+    
+    return okm[:length]
 
 
 class AES_Encrypt_Thread(QThread):
@@ -259,31 +276,43 @@ class AES_Tools_Widget(QWidget):
         self.key_group.setLayout(key_layout)
         main_layout.addWidget(self.key_group)
 
-        self.hkdf_group = QGroupBox("HKDF密钥派生 (可选)")
+        self.hkdf_group = QGroupBox("HKDF密钥派生 (两阶段)")
         hkdf_layout = QVBoxLayout()
 
-        uid_label = BodyLabel("芯片UID (96位):")
+        devkey_label = BodyLabel("DevKey (128位):")
+        self.devkey_lineedit = LineEdit()
+        self.devkey_lineedit.setPlaceholderText("设备密钥（32个十六进制字符），存储于OTP")
+        self.generate_devkey_button = PushButton(FIF.SYNC, "生成", self)
+        self.generate_devkey_button.clicked.connect(self.generate_devkey)
+        devkey_hlayout = QHBoxLayout()
+        devkey_hlayout.addWidget(devkey_label)
+        devkey_hlayout.addWidget(self.devkey_lineedit, 1)
+        devkey_hlayout.addWidget(self.generate_devkey_button)
+        devkey_hlayout.setContentsMargins(0, 2, 0, 2)
+        hkdf_layout.addLayout(devkey_hlayout)
+
+        uid_label = BodyLabel("UID (96位):")
         self.uid_lineedit = LineEdit()
-        self.uid_lineedit.setPlaceholderText("96位UID（24个十六进制字符），例如：123456789ABCDEF012345678")
+        self.uid_lineedit.setPlaceholderText("芯片唯一ID（24个十六进制字符）")
         uid_hlayout = QHBoxLayout()
         uid_hlayout.addWidget(uid_label)
         uid_hlayout.addWidget(self.uid_lineedit, 1)
         uid_hlayout.setContentsMargins(0, 2, 0, 2)
         hkdf_layout.addLayout(uid_hlayout)
 
-        salt_label = BodyLabel("Salt (可选):")
-        self.salt_lineedit = LineEdit()
-        self.salt_lineedit.setPlaceholderText("Salt值（十六进制字符串），留空则使用默认salt")
-        self.generate_salt_button = PushButton(FIF.SYNC, "生成", self)
-        self.generate_salt_button.clicked.connect(self.generate_salt)
-        salt_hlayout = QHBoxLayout()
-        salt_hlayout.addWidget(salt_label)
-        salt_hlayout.addWidget(self.salt_lineedit, 1)
-        salt_hlayout.addWidget(self.generate_salt_button)
-        salt_hlayout.setContentsMargins(0, 2, 0, 2)
-        hkdf_layout.addLayout(salt_hlayout)
+        dynamicsalt_label = BodyLabel("DynamicSalt (128位):")
+        self.dynamicsalt_lineedit = LineEdit()
+        self.dynamicsalt_lineedit.setPlaceholderText("动态盐值（32个十六进制字符），每版固件不同")
+        self.generate_dynamicsalt_button = PushButton(FIF.SYNC, "生成", self)
+        self.generate_dynamicsalt_button.clicked.connect(self.generate_dynamicsalt)
+        dynamicsalt_hlayout = QHBoxLayout()
+        dynamicsalt_hlayout.addWidget(dynamicsalt_label)
+        dynamicsalt_hlayout.addWidget(self.dynamicsalt_lineedit, 1)
+        dynamicsalt_hlayout.addWidget(self.generate_dynamicsalt_button)
+        dynamicsalt_hlayout.setContentsMargins(0, 2, 0, 2)
+        hkdf_layout.addLayout(dynamicsalt_hlayout)
 
-        self.hkdf_button = PushButton(FIF.CERTIFICATE, "使用HKDF生成密钥", self)
+        self.hkdf_button = PushButton(FIF.CERTIFICATE, "两阶段HKDF派生密钥", self)
         self.hkdf_button.clicked.connect(self.generate_key_from_hkdf)
         hkdf_layout.addWidget(self.hkdf_button)
 
@@ -424,12 +453,25 @@ class AES_Tools_Widget(QWidget):
             parent=self,
         )
 
-    def generate_salt(self):
-        salt = os.urandom(16)
-        self.salt_lineedit.setText(salt.hex())
+    def generate_devkey(self):
+        devkey = os.urandom(16)
+        self.devkey_lineedit.setText(devkey.hex())
         InfoBar.success(
-            title="Salt生成",
-            content="已生成随机Salt",
+            title="DevKey生成",
+            content="已生成随机128位DevKey（模拟OTP存储）",
+            orient=Qt.Orientation.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=2000,
+            parent=self,
+        )
+
+    def generate_dynamicsalt(self):
+        dynamicsalt = os.urandom(16)
+        self.dynamicsalt_lineedit.setText(dynamicsalt.hex())
+        InfoBar.success(
+            title="DynamicSalt生成",
+            content="已生成随机128位DynamicSalt",
             orient=Qt.Orientation.Horizontal,
             isClosable=True,
             position=InfoBarPosition.TOP,
@@ -450,11 +492,53 @@ class AES_Tools_Widget(QWidget):
             )
             return
 
+        devkey_hex = self.devkey_lineedit.text().strip()
+        if not devkey_hex:
+            InfoBar.warning(
+                title="错误",
+                content="请输入DevKey",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
+            return
+
         uid_hex = self.uid_lineedit.text().strip()
         if not uid_hex:
             InfoBar.warning(
                 title="错误",
-                content="请输入芯片UID",
+                content="请输入UID",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
+            return
+
+        dynamicsalt_hex = self.dynamicsalt_lineedit.text().strip()
+        if not dynamicsalt_hex:
+            InfoBar.warning(
+                title="错误",
+                content="请输入DynamicSalt",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
+            return
+
+        try:
+            devkey = bytes.fromhex(devkey_hex)
+            if len(devkey) != 16:
+                raise ValueError("DevKey长度必须为128位（16字节，32个十六进制字符）")
+        except ValueError as e:
+            InfoBar.warning(
+                title="错误",
+                content=f"DevKey格式错误: {str(e)}",
                 orient=Qt.Orientation.Horizontal,
                 isClosable=True,
                 position=InfoBarPosition.TOP,
@@ -479,38 +563,39 @@ class AES_Tools_Widget(QWidget):
             )
             return
 
-        salt_hex = self.salt_lineedit.text().strip()
-        if salt_hex:
-            try:
-                salt = bytes.fromhex(salt_hex)
-            except ValueError as e:
-                InfoBar.warning(
-                    title="错误",
-                    content=f"Salt格式错误: {str(e)}",
-                    orient=Qt.Orientation.Horizontal,
-                    isClosable=True,
-                    position=InfoBarPosition.TOP,
-                    duration=3000,
-                    parent=self,
-                )
-                return
-        else:
-            salt = b'IAP_HKDF_SALT_DEFAULT'
+        try:
+            dynamicsalt = bytes.fromhex(dynamicsalt_hex)
+            if len(dynamicsalt) != 16:
+                raise ValueError("DynamicSalt长度必须为128位（16字节，32个十六进制字符）")
+        except ValueError as e:
+            InfoBar.warning(
+                title="错误",
+                content=f"DynamicSalt格式错误: {str(e)}",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
+            return
 
         try:
-            key = HKDF(
-                master=uid,
-                salt=salt,
-                key_len=32,
-                hashmod=SHA256,
-                num_keys=1
+            prk = hkdf_extract(
+                salt=dynamicsalt,
+                ikm=devkey
             )
             
-            self.key_lineedit.setText(key.hex())
+            aes_key = hkdf_expand(
+                prk=prk,
+                info=uid,
+                length=32
+            )
+            
+            self.key_lineedit.setText(aes_key.hex())
             
             InfoBar.success(
-                title="HKDF密钥生成成功",
-                content=f"已从UID派生出AES-256密钥",
+                title="两阶段HKDF密钥派生成功",
+                content="已从DevKey派生出AES-256密钥",
                 orient=Qt.Orientation.Horizontal,
                 isClosable=True,
                 position=InfoBarPosition.TOP,
@@ -518,15 +603,28 @@ class AES_Tools_Widget(QWidget):
                 parent=self,
             )
             
-            self.output_area_text.appendPlainText("HKDF密钥派生信息:")
-            self.output_area_text.appendPlainText(f"UID: {uid_hex}")
-            self.output_area_text.appendPlainText(f"Salt: {salt.hex()}")
-            self.output_area_text.appendPlainText(f"派生密钥: {key.hex()}")
-            self.output_area_text.appendPlainText(f"算法: HKDF-SHA256")
+            self.output_area_text.appendPlainText("=" * 74)
+            self.output_area_text.appendPlainText("两阶段HKDF密钥派生信息:")
+            self.output_area_text.appendPlainText("-" * 74)
+            self.output_area_text.appendPlainText("【输入参数】")
+            self.output_area_text.appendPlainText(f"DevKey (OTP): {devkey_hex}")
+            self.output_area_text.appendPlainText(f"UID (芯片ID): {uid_hex}")
+            self.output_area_text.appendPlainText(f"DynamicSalt: {dynamicsalt_hex}")
+            self.output_area_text.appendPlainText("-" * 74)
+            self.output_area_text.appendPlainText("【派生过程】")
+            self.output_area_text.appendPlainText("阶段1 - HKDF-Extract:")
+            self.output_area_text.appendPlainText(f"  PRK = HMAC-SHA256(DynamicSalt, DevKey)")
+            self.output_area_text.appendPlainText(f"  PRK = {prk.hex()}")
+            self.output_area_text.appendPlainText("阶段2 - HKDF-Expand:")
+            self.output_area_text.appendPlainText(f"  AES_Key = HKDF-Expand(PRK, info=UID, len=32)")
+            self.output_area_text.appendPlainText(f"  AES_Key = {aes_key.hex()}")
+            self.output_area_text.appendPlainText("-" * 74)
+            self.output_area_text.appendPlainText(f"派生密钥 (AES-256): {aes_key.hex()}")
+            self.output_area_text.appendPlainText("=" * 74)
             
         except Exception as e:
             InfoBar.error(
-                title="HKDF密钥生成失败",
+                title="HKDF密钥派生失败",
                 content=f"错误: {str(e)}",
                 orient=Qt.Orientation.Horizontal,
                 isClosable=True,
@@ -822,8 +920,9 @@ class AES_Tools_Widget(QWidget):
             if self.save_key_checkbox.isChecked():
                 key_file = output_file + ".key"
                 iv_hex = self.iv_lineedit.text().strip()
+                devkey_hex = self.devkey_lineedit.text().strip()
                 uid_hex = self.uid_lineedit.text().strip()
-                salt_hex = self.salt_lineedit.text().strip()
+                dynamicsalt_hex = self.dynamicsalt_lineedit.text().strip()
                 
                 with open(key_file, 'w') as f:
                     f.write(f"Key: {self.key_lineedit.text().strip()}\n")
@@ -831,11 +930,14 @@ class AES_Tools_Widget(QWidget):
                         f.write(f"IV: {iv_hex}\n")
                     f.write(f"Mode: {self.mode_combo.currentText()}\n")
                     
+                    if devkey_hex:
+                        f.write(f"DevKey: {devkey_hex}\n")
                     if uid_hex:
                         f.write(f"UID: {uid_hex}\n")
-                        f.write(f"Algorithm: HKDF-SHA256\n")
-                    if salt_hex:
-                        f.write(f"Salt: {salt_hex}\n")
+                    if dynamicsalt_hex:
+                        f.write(f"DynamicSalt: {dynamicsalt_hex}\n")
+                    if devkey_hex and uid_hex and dynamicsalt_hex:
+                        f.write(f"Algorithm: HKDF-Extract-Expand-SHA256\n")
                         
                 self.output_area_text.appendPlainText(f"密钥文件已保存: {key_file}")
             
