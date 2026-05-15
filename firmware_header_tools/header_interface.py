@@ -5,6 +5,7 @@ import struct
 import base64
 from datetime import datetime
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -26,6 +27,7 @@ from qfluentwidgets import (
     LineEdit,
     SpinBox,
     PlainTextEdit,
+    TextBrowser,
     isDarkTheme,
     ComboBox,
     CheckBox,
@@ -228,6 +230,638 @@ class PackageThread(QThread):
             self.error_occurred.emit(f"打包失败: {str(e)}")
 
 
+class PackCompareDialog(QWidget):
+    def __init__(self, before_file=None, after_file=None, parent=None, 
+                 devkey=None, public_key_bytes=None, expected_header=None,
+                 expected_dynamic_salt=None):
+        super().__init__(parent)
+        self.setWindowTitle("打包对比查看")
+        self.resize(1400, 800)
+        self.setWindowFlags(Qt.WindowType.Window)
+        
+        self.before_file = before_file
+        self.after_file = after_file
+        
+        self._devkey = devkey
+        self._public_key_bytes = public_key_bytes
+        self._expected_header = expected_header
+        self._expected_dynamic_salt = expected_dynamic_salt
+        
+        self._init_ui()
+        if self.before_file and self.after_file:
+            self._load_data()
+    
+    def _init_ui(self):
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        
+        self.title_label = StrongBodyLabel("固件打包对比 - 左侧: 打包前 (加密数据) | 右侧: 打包后 (完整固件包)")
+        main_layout.addWidget(self.title_label)
+        
+        file_layout = QHBoxLayout()
+        
+        self.before_group = QGroupBox("打包前文件")
+        before_file_layout = QHBoxLayout()
+        self.before_file_lineedit = LineEdit()
+        if self.before_file:
+            self.before_file_lineedit.setText(self.before_file)
+        self.before_file_lineedit.setPlaceholderText("选择加密固件文件 (.bin.aes)")
+        self.browse_before_button = PushButton(FIF.FOLDER, "浏览", self)
+        self.browse_before_button.clicked.connect(self._browse_before_file)
+        before_file_layout.addWidget(self.before_file_lineedit)
+        before_file_layout.addWidget(self.browse_before_button)
+        self.before_group.setLayout(before_file_layout)
+        file_layout.addWidget(self.before_group)
+        
+        self.after_group = QGroupBox("打包后文件")
+        after_file_layout = QHBoxLayout()
+        self.after_file_lineedit = LineEdit()
+        if self.after_file:
+            self.after_file_lineedit.setText(self.after_file)
+        self.after_file_lineedit.setPlaceholderText("选择打包后的固件包 (.bin)")
+        self.browse_after_button = PushButton(FIF.FOLDER, "浏览", self)
+        self.browse_after_button.clicked.connect(self._browse_after_file)
+        after_file_layout.addWidget(self.after_file_lineedit)
+        after_file_layout.addWidget(self.browse_after_button)
+        self.after_group.setLayout(after_file_layout)
+        file_layout.addWidget(self.after_group)
+        
+        self.compare_button = PushButton(FIF.CAMERA, "开始对比", self)
+        self.compare_button.clicked.connect(self._load_data)
+        file_layout.addWidget(self.compare_button)
+        
+        main_layout.addLayout(file_layout)
+        
+        legend_layout = QHBoxLayout()
+        self.legend_label = BodyLabel("图例: ")
+        legend_layout.addWidget(self.legend_label)
+        
+        self.legend_header = QWidget()
+        self.legend_header.setStyleSheet("background-color: #3498db; border-radius: 3px;")
+        self.legend_header.setFixedHeight(20)
+        self.legend_header.setFixedWidth(60)
+        legend_layout.addWidget(self.legend_header)
+        self.legend_header_label = BodyLabel("固定头部 (64字节)")
+        legend_layout.addWidget(self.legend_header_label)
+        
+        self.legend_salt = QWidget()
+        self.legend_salt.setStyleSheet("background-color: #e74c3c; border-radius: 3px;")
+        self.legend_salt.setFixedHeight(20)
+        self.legend_salt.setFixedWidth(60)
+        legend_layout.addWidget(self.legend_salt)
+        self.legend_salt_label = BodyLabel("DynamicSalt (16字节)")
+        legend_layout.addWidget(self.legend_salt_label)
+        
+        self.legend_iv = QWidget()
+        self.legend_iv.setStyleSheet("background-color: #9b59b6; border-radius: 3px;")
+        self.legend_iv.setFixedHeight(20)
+        self.legend_iv.setFixedWidth(60)
+        legend_layout.addWidget(self.legend_iv)
+        self.legend_iv_label = BodyLabel("IV (16字节)")
+        legend_layout.addWidget(self.legend_iv_label)
+        
+        self.legend_ciphertext = QWidget()
+        self.legend_ciphertext.setStyleSheet("background-color: #2ecc71; border-radius: 3px;")
+        self.legend_ciphertext.setFixedHeight(20)
+        self.legend_ciphertext.setFixedWidth(60)
+        legend_layout.addWidget(self.legend_ciphertext)
+        self.legend_ciphertext_label = BodyLabel("密文数据")
+        legend_layout.addWidget(self.legend_ciphertext_label)
+        
+        self.legend_sig = QWidget()
+        self.legend_sig.setStyleSheet("background-color: #f39c12; border-radius: 3px;")
+        self.legend_sig.setFixedHeight(20)
+        self.legend_sig.setFixedWidth(60)
+        legend_layout.addWidget(self.legend_sig)
+        self.legend_sig_label = BodyLabel("Ed25519签名 (64字节)")
+        legend_layout.addWidget(self.legend_sig_label)
+        
+        legend_layout.addStretch(1)
+        main_layout.addLayout(legend_layout)
+        
+        content_layout = QHBoxLayout()
+        
+        self._font_size = 10
+        self._font = QFont("Microsoft YaHei", self._font_size)
+        
+        self.before_text = TextBrowser()
+        self.before_text.setPlainText("加载中...")
+        self.before_text.setFont(self._font)
+        
+        self.after_text = TextBrowser()
+        self.after_text.setPlainText("加载中...")
+        self.after_text.setFont(self._font)
+        
+        self.before_content_group = QGroupBox("打包前 (加密固件)")
+        before_layout = QVBoxLayout()
+        before_layout.addWidget(self.before_text)
+        self.before_content_group.setLayout(before_layout)
+        
+        self.after_content_group = QGroupBox("打包后 (完整固件包)")
+        after_layout = QVBoxLayout()
+        after_layout.addWidget(self.after_text)
+        self.after_content_group.setLayout(after_layout)
+        
+        content_layout.addWidget(self.before_content_group)
+        content_layout.addWidget(self.after_content_group)
+        
+        main_layout.addLayout(content_layout)
+        
+        btn_layout = QHBoxLayout()
+        
+        btn_layout.addStretch(1)
+        
+        font_size_label = BodyLabel("字体大小:")
+        btn_layout.addWidget(font_size_label)
+        
+        self.font_size_spinbox = SpinBox()
+        self.font_size_spinbox.setRange(4, 100)
+        self.font_size_spinbox.setValue(self._font_size)
+        self.font_size_spinbox.valueChanged.connect(self._change_font_size)
+        btn_layout.addWidget(self.font_size_spinbox)
+        
+        self.close_btn = PushButton(FIF.CANCEL, "关闭", self)
+        self.close_btn.clicked.connect(self.close)
+        btn_layout.addWidget(self.close_btn)
+        
+        main_layout.addLayout(btn_layout)
+        
+        self.__updateTheme()
+        cfg.themeChanged.connect(self.__updateTheme)
+    
+    def _browse_before_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "选择打包前的加密固件", "", "加密固件 (*.bin.aes *.aes);;所有文件 (*.*)"
+        )
+        if file_path:
+            self.before_file_lineedit.setText(file_path)
+            self.before_file = file_path
+    
+    def _browse_after_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "选择打包后的固件包", "", "固件包 (*.bin);;所有文件 (*.*)"
+        )
+        if file_path:
+            self.after_file_lineedit.setText(file_path)
+            self.after_file = file_path
+    
+    def _change_font_size(self, value):
+        self._font_size = value
+        self._font.setPointSize(value)
+        
+        bg_color = "#1e1e1e" if isDarkTheme() else "#ffffff"
+        text_color = "#ffffff" if isDarkTheme() else "#000000"
+        
+        self.before_text.setStyleSheet(f"""
+            TextBrowser {{
+                background-color: {bg_color};
+                color: {text_color};
+                border: none;
+                font-family: "Microsoft YaHei", "微软雅黑", sans-serif;
+                font-size: {value}pt;
+            }}
+        """)
+        self.after_text.setStyleSheet(f"""
+            TextBrowser {{
+                background-color: {bg_color};
+                color: {text_color};
+                border: none;
+                font-family: "Microsoft YaHei", "微软雅黑", sans-serif;
+                font-size: {value}pt;
+            }}
+        """)
+    
+    def __updateTheme(self):
+        is_dark = isDarkTheme()
+        text_color = "#ffffff" if is_dark else "#000000"
+        bg_color = "#1e1e1e" if is_dark else "#ffffff"
+        
+        self._is_dark = is_dark
+        self._text_color = text_color
+        self._bg_color = bg_color
+        
+        self._header_color = "#3b82f6" if is_dark else "#3498db"
+        self._salt_color = "#ef4444" if is_dark else "#e74c3c"
+        self._iv_color = "#a855f7" if is_dark else "#9b59b6"
+        self._ciphertext_color = "#22c55e" if is_dark else "#2ecc71"
+        self._sig_color = "#f59e0b" if is_dark else "#f39c12"
+        
+        scrollbar_bg = "#2d2d2d" if is_dark else "#f0f0f0"
+        scrollbar_handle = "#555555" if is_dark else "#c0c0c0"
+        scrollbar_handle_hover = "#666666" if is_dark else "#a0a0a0"
+        
+        self.setStyleSheet(f"""
+            PackCompareDialog {{
+                color: {text_color};
+                background-color: {bg_color};
+            }}
+            QGroupBox {{
+                font-weight: bold;
+                border: 1px solid {'#444' if is_dark else '#ccc'};
+                border-radius: 5px;
+                margin-top: 10px;
+                padding-top: 10px;
+                color: {text_color};
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+                color: {text_color};
+            }}
+            QScrollBar:vertical {{
+                background: {scrollbar_bg};
+                width: 10px;
+                border-radius: 5px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {scrollbar_handle};
+                border-radius: 5px;
+                min-height: 20px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {scrollbar_handle_hover};
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
+            }}
+            QScrollBar:horizontal {{
+                background: {scrollbar_bg};
+                height: 10px;
+                border-radius: 5px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background: {scrollbar_handle};
+                border-radius: 5px;
+                min-width: 20px;
+            }}
+            QScrollBar::handle:horizontal:hover {{
+                background: {scrollbar_handle_hover};
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                width: 0px;
+            }}
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+                background: none;
+            }}
+        """)
+        
+        title_style = f"color: {text_color};"
+        self.title_label.setStyleSheet(title_style)
+        
+        legend_text_style = f"color: {text_color};"
+        self.legend_label.setStyleSheet(legend_text_style)
+        self.legend_header_label.setStyleSheet(legend_text_style)
+        self.legend_salt_label.setStyleSheet(legend_text_style)
+        self.legend_iv_label.setStyleSheet(legend_text_style)
+        self.legend_ciphertext_label.setStyleSheet(legend_text_style)
+        self.legend_sig_label.setStyleSheet(legend_text_style)
+        
+        self.legend_header.setStyleSheet(f"background-color: {self._header_color}; border-radius: 3px;")
+        self.legend_salt.setStyleSheet(f"background-color: {self._salt_color}; border-radius: 3px;")
+        self.legend_iv.setStyleSheet(f"background-color: {self._iv_color}; border-radius: 3px;")
+        self.legend_ciphertext.setStyleSheet(f"background-color: {self._ciphertext_color}; border-radius: 3px;")
+        self.legend_sig.setStyleSheet(f"background-color: {self._sig_color}; border-radius: 3px;")
+        
+        font_size = self._font_size if hasattr(self, '_font_size') else 10
+        self.before_text.setStyleSheet(f"""
+            TextBrowser {{
+                background-color: {bg_color};
+                color: {text_color};
+                border: none;
+                font-family: "Microsoft YaHei", "微软雅黑", sans-serif;
+                font-size: {font_size}pt;
+            }}
+        """)
+        self.after_text.setStyleSheet(f"""
+            TextBrowser {{
+                background-color: {bg_color};
+                color: {text_color};
+                border: none;
+                font-family: "Microsoft YaHei", "微软雅黑", sans-serif;
+                font-size: {font_size}pt;
+            }}
+        """)
+    
+    def _load_data(self):
+        try:
+            before_path = self.before_file_lineedit.text().strip()
+            after_path = self.after_file_lineedit.text().strip()
+            
+            if not before_path:
+                self.before_text.setHtml(self._color_text("请选择打包前的加密固件文件", self._text_color))
+                return
+            
+            if not after_path:
+                self.after_text.setHtml(self._color_text("请选择打包后的固件包文件", self._text_color))
+                return
+            
+            if not os.path.exists(before_path):
+                self.before_text.setHtml(self._color_text(f"文件不存在: {before_path}", self._text_color))
+                return
+            
+            if not os.path.exists(after_path):
+                self.after_text.setHtml(self._color_text(f"文件不存在: {after_path}", self._text_color))
+                return
+            
+            with open(before_path, 'rb') as f:
+                before_data = f.read()
+            
+            with open(after_path, 'rb') as f:
+                after_data = f.read()
+            
+            before_html = self._format_before_data_html(before_data)
+            after_html = self._format_after_data_html(after_data, before_data)
+            
+            self.before_text.setHtml(before_html)
+            self.after_text.setHtml(after_html)
+            
+        except Exception as e:
+            self.before_text.setHtml(self._color_text(f"加载失败: {str(e)}", self._text_color))
+            self.after_text.setHtml(self._color_text(f"加载失败: {str(e)}", self._text_color))
+    
+    def _color_text(self, text, color):
+        return f'<span style="color: {color};">{text}</span>'
+    
+    def _escape_html(self, text):
+        return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    
+    def _format_before_data_html(self, data):
+        lines = []
+        lines.append("=" * 60)
+        lines.append("打包前文件结构 (加密固件)")
+        lines.append("=" * 60)
+        lines.append(f"文件总大小: {len(data)} 字节")
+        lines.append("-" * 60)
+        
+        if len(data) >= IV_SIZE:
+            iv = data[:IV_SIZE]
+            ciphertext = data[IV_SIZE:]
+            
+            iv_line = f"[0x0000 - 0x{IV_SIZE-1:04X}] IV (16字节):"
+            lines.append(f'<span style="color: {self._iv_color};">{self._escape_html(iv_line)}</span>')
+            lines.append(f'<span style="color: {self._iv_color};">  {iv.hex()}</span>')
+            lines.append("-" * 60)
+            
+            ct_line = f"[0x{IV_SIZE:04X} - 0x{len(data)-1:04X}] 密文数据 ({len(ciphertext)} 字节):"
+            lines.append(f'<span style="color: {self._ciphertext_color};">{self._escape_html(ct_line)}</span>')
+            
+            hex_lines = self._format_hex_dump_html(ciphertext, IV_SIZE, self._ciphertext_color)
+            lines.extend(hex_lines)
+        else:
+            lines.append("文件太小，无法解析")
+        
+        lines.append("=" * 60)
+        return "<pre style='margin: 0; font-family: \"Microsoft YaHei\", \"微软雅黑\", monospace;'>" + "<br>".join(lines) + "</pre>"
+    
+    def _format_after_data_html(self, data, before_data):
+        lines = []
+        error_color = "#ff6b6b"
+        success_color = "#51cf66"
+        warning_color = "#ffd43b"
+        
+        lines.append("=" * 60)
+        lines.append("打包后文件结构 (完整固件包)")
+        lines.append("=" * 60)
+        lines.append(f"文件总大小: {len(data)} 字节")
+        lines.append("-" * 60)
+        
+        errors = []
+        warnings = []
+        
+        offset = 0
+        
+        if len(data) < HEADER_SIZE:
+            lines.append(f'<span style="color: {error_color};">✗ 错误: 文件太小，无法包含有效头部 (需要至少 {HEADER_SIZE} 字节)</span>')
+            errors.append("文件太小")
+        else:
+            header_data = data[:HEADER_SIZE]
+            header_line = f"[0x{offset:04X} - 0x{HEADER_SIZE-1:04X}] 固定头部 (64字节):"
+            lines.append(f'<span style="color: {self._header_color};">{self._escape_html(header_line)}</span>')
+            
+            try:
+                header = FirmwareHeader.from_bytes(header_data)
+                
+                magic_valid = header.validate_magic()
+                magic_status = f'<span style="color: {success_color};">✓ 有效</span>' if magic_valid else f'<span style="color: {error_color};">✗ 无效</span>'
+                if not magic_valid:
+                    errors.append("魔术字无效")
+                
+                lines.append(f"  魔术字:           0x{header.magic.hex().upper()} {magic_status}")
+                lines.append(f"  头部版本:         {header.header_version}")
+                lines.append(f"  固件版本:         {header.get_version_string()}")
+                lines.append(f"  载荷总大小:       {header.total_payload_size} 字节")
+                lines.append(f"  镜像类型:         {header.get_image_type_string()}")
+                lines.append(f"  加密算法:         {header.get_encryption_string()}")
+                lines.append(f"  签名算法:         {header.get_signature_string()}")
+                lines.append(f"  硬件兼容标识:     0x{header.hardware_compatibility:08X}")
+                lines.append(f"  安全计数器:       0x{header.security_counter:08X}")
+                lines.append(f"  构建时间戳:       {header.get_timestamp_string()}")
+                lines.append(f"  头部校验和:       {header.header_checksum.hex()}")
+                
+                if self._devkey:
+                    if header.verify_checksum(self._devkey):
+                        lines.append(f'<span style="color: {success_color};">  ✓ HMAC-SHA256 头部校验: 通过</span>')
+                    else:
+                        lines.append(f'<span style="color: {error_color};">  ✗ HMAC-SHA256 头部校验: 失败</span>')
+                        errors.append("HMAC头部校验失败")
+                else:
+                    lines.append(f'<span style="color: {warning_color};">  ⚠ HMAC-SHA256 头部校验: 跳过 (未提供DevKey)</span>')
+                
+                if self._expected_header:
+                    if header.firmware_version_major != self._expected_header.firmware_version_major:
+                        errors.append(f"固件主版本不匹配: 预期 {self._expected_header.firmware_version_major}, 实际 {header.firmware_version_major}")
+                    if header.firmware_version_minor != self._expected_header.firmware_version_minor:
+                        errors.append(f"固件次版本不匹配: 预期 {self._expected_header.firmware_version_minor}, 实际 {header.firmware_version_minor}")
+                    if header.firmware_version_patch != self._expected_header.firmware_version_patch:
+                        errors.append(f"固件修订版本不匹配: 预期 {self._expected_header.firmware_version_patch}, 实际 {header.firmware_version_patch}")
+                    if header.image_type != self._expected_header.image_type:
+                        errors.append(f"镜像类型不匹配: 预期 {self._expected_header.image_type}, 实际 {header.image_type}")
+                    if header.encryption_algorithm != self._expected_header.encryption_algorithm:
+                        errors.append(f"加密算法不匹配: 预期 {self._expected_header.encryption_algorithm}, 实际 {header.encryption_algorithm}")
+                    if header.signature_algorithm != self._expected_header.signature_algorithm:
+                        errors.append(f"签名算法不匹配: 预期 {self._expected_header.signature_algorithm}, 实际 {header.signature_algorithm}")
+                    if header.hardware_compatibility != self._expected_header.hardware_compatibility:
+                        errors.append(f"硬件兼容标识不匹配: 预期 0x{self._expected_header.hardware_compatibility:08X}, 实际 0x{header.hardware_compatibility:08X}")
+                    if header.security_counter != self._expected_header.security_counter:
+                        errors.append(f"安全计数器不匹配: 预期 0x{self._expected_header.security_counter:08X}, 实际 0x{header.security_counter:08X}")
+                
+                expected_payload_size = len(data) - HEADER_SIZE - SIGNATURE_SIZE
+                if header.total_payload_size != expected_payload_size:
+                    warnings.append(f"载荷大小不匹配: 头部声明 {header.total_payload_size} 字节, 实际 {expected_payload_size} 字节")
+                    lines.append(f'<span style="color: {warning_color};">  ⚠ 载荷大小警告: 头部声明 {header.total_payload_size} 字节, 实际 {expected_payload_size} 字节</span>')
+                
+            except Exception as e:
+                lines.append(f'<span style="color: {error_color};">  ✗ 头部解析失败: {str(e)}</span>')
+                lines.append(f"  原始数据: {header_data.hex()}")
+                errors.append(f"头部解析失败: {str(e)}")
+            
+            offset = HEADER_SIZE
+            lines.append("-" * 60)
+        
+        if len(data) >= offset + DYNAMICSALT_SIZE:
+            salt_data = data[offset:offset + DYNAMICSALT_SIZE]
+            salt_line = f"[0x{offset:04X} - 0x{offset + DYNAMICSALT_SIZE - 1:04X}] DynamicSalt (16字节):"
+            lines.append(f'<span style="color: {self._salt_color};">{self._escape_html(salt_line)}</span>')
+            lines.append(f'<span style="color: {self._salt_color};">  {salt_data.hex()}</span>')
+            
+            if self._expected_dynamic_salt:
+                if salt_data == self._expected_dynamic_salt:
+                    lines.append(f'<span style="color: {success_color};">  ✓ DynamicSalt 与预期一致</span>')
+                else:
+                    lines.append(f'<span style="color: {error_color};">  ✗ DynamicSalt 与预期不一致!</span>')
+                    lines.append(f'<span style="color: {error_color};">    预期: {self._expected_dynamic_salt.hex()}</span>')
+                    errors.append("DynamicSalt 不一致")
+            
+            offset += DYNAMICSALT_SIZE
+            lines.append("-" * 60)
+        else:
+            lines.append(f'<span style="color: {warning_color};">⚠ 警告: 文件缺少 DynamicSalt 数据</span>')
+            warnings.append("缺少 DynamicSalt")
+        
+        if len(data) >= offset + IV_SIZE:
+            iv_data = data[offset:offset + IV_SIZE]
+            iv_line = f"[0x{offset:04X} - 0x{offset + IV_SIZE - 1:04X}] IV (16字节):"
+            lines.append(f'<span style="color: {self._iv_color};">{self._escape_html(iv_line)}</span>')
+            lines.append(f'<span style="color: {self._iv_color};">  {iv_data.hex()}</span>')
+            
+            if len(before_data) >= IV_SIZE:
+                before_iv = before_data[:IV_SIZE]
+                if iv_data == before_iv:
+                    lines.append(f'<span style="color: {success_color};">  ✓ IV 与打包前一致</span>')
+                else:
+                    lines.append(f'<span style="color: {error_color};">  ✗ IV 与打包前不一致!</span>')
+                    errors.append("IV 不一致")
+            
+            offset += IV_SIZE
+            lines.append("-" * 60)
+        else:
+            lines.append(f'<span style="color: {warning_color};">⚠ 警告: 文件缺少 IV 数据</span>')
+            warnings.append("缺少 IV")
+        
+        if len(data) >= offset + SIGNATURE_SIZE:
+            ciphertext_end = len(data) - SIGNATURE_SIZE
+            if ciphertext_end > offset:
+                ciphertext = data[offset:ciphertext_end]
+                ct_line = f"[0x{offset:04X} - 0x{ciphertext_end - 1:04X}] 密文数据 ({len(ciphertext)} 字节):"
+                lines.append(f'<span style="color: {self._ciphertext_color};">{self._escape_html(ct_line)}</span>')
+                
+                if len(before_data) > IV_SIZE:
+                    before_ciphertext = before_data[IV_SIZE:]
+                    if ciphertext == before_ciphertext:
+                        lines.append(f'<span style="color: {success_color};">  ✓ 密文数据与打包前一致</span>')
+                    else:
+                        lines.append(f'<span style="color: {error_color};">  ✗ 密文数据与打包前不一致!</span>')
+                        errors.append("密文数据不一致")
+                
+                hex_lines = self._format_hex_dump_html(ciphertext, offset, self._ciphertext_color, max_lines=20)
+                lines.extend(hex_lines)
+                if len(hex_lines) >= 20:
+                    lines.append(f"  ... (省略 {len(ciphertext) - 16*20} 字节)")
+                
+                offset = ciphertext_end
+                lines.append("-" * 60)
+            elif ciphertext_end < offset:
+                lines.append(f'<span style="color: {error_color};">✗ 错误: 数据结构不完整，签名区域与已解析数据重叠!</span>')
+                lines.append(f'<span style="color: {error_color};">  当前偏移: 0x{offset:04X}, 签名起始: 0x{ciphertext_end:04X}</span>')
+                errors.append("数据结构不完整，签名区域与已解析数据重叠")
+            
+            sig_data = data[-SIGNATURE_SIZE:]
+            sig_line = f"[0x{offset:04X} - 0x{len(data)-1:04X}] Ed25519签名 (64字节):"
+            lines.append(f'<span style="color: {self._sig_color};">{self._escape_html(sig_line)}</span>')
+            lines.append(f'<span style="color: {self._sig_color};">  {sig_data.hex()}</span>')
+            
+            if self._public_key_bytes and CRYPTO_AVAILABLE:
+                try:
+                    payload = data[HEADER_SIZE:HEADER_SIZE + header.total_payload_size]
+                    data_to_verify = header_data + payload
+                    
+                    import base64
+                    header_der = b'\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00'
+                    der_bytes = header_der + self._public_key_bytes
+                    pem_content = base64.b64encode(der_bytes).decode('utf-8')
+                    public_pem = ('-----BEGIN PUBLIC KEY-----\n' +
+                                  pem_content + '\n-----END PUBLIC KEY-----\n')
+                    public_key = ECC.import_key(public_pem)
+                    
+                    verifier = eddsa.new(public_key, 'rfc8032')
+                    hash_obj = SHA512.new(data_to_verify)
+                    verifier.verify(hash_obj.digest(), sig_data)
+                    
+                    lines.append(f'<span style="color: {success_color};">  ✓ Ed25519 签名验证: 通过</span>')
+                except ValueError:
+                    lines.append(f'<span style="color: {error_color};">  ✗ Ed25519 签名验证: 失败 (签名无效)</span>')
+                    errors.append("Ed25519签名无效")
+                except Exception as e:
+                    lines.append(f'<span style="color: {error_color};">  ✗ Ed25519 签名验证: 失败 ({str(e)})</span>')
+                    errors.append(f"Ed25519签名验证失败: {str(e)}")
+            elif not self._public_key_bytes:
+                lines.append(f'<span style="color: {warning_color};">  ⚠ Ed25519 签名验证: 跳过 (未提供公钥)</span>')
+            else:
+                lines.append(f'<span style="color: {warning_color};">  ⚠ Ed25519 签名验证: 跳过 (pycryptodome未安装)</span>')
+        else:
+            lines.append(f'<span style="color: {warning_color};">⚠ 警告: 文件缺少签名数据 (需要至少 {offset + SIGNATURE_SIZE} 字节，当前 {len(data)} 字节)</span>')
+            warnings.append("缺少签名")
+        
+        lines.append("=" * 60)
+        lines.append("")
+        
+        if errors or warnings:
+            lines.append("验证结果:")
+            if errors:
+                lines.append(f'<span style="color: {error_color};">  ✗ 发现 {len(errors)} 个错误:</span>')
+                for err in errors:
+                    lines.append(f'<span style="color: {error_color};">    - {err}</span>')
+            if warnings:
+                lines.append(f'<span style="color: {warning_color};">  ⚠ 发现 {len(warnings)} 个警告:</span>')
+                for warn in warnings:
+                    lines.append(f'<span style="color: {warning_color};">    - {warn}</span>')
+            if not errors:
+                lines.append(f'<span style="color: {success_color};">  ✓ 整体验证通过 (有警告)</span>')
+            lines.append("")
+        else:
+            lines.append("验证结果:")
+            lines.append(f'<span style="color: {success_color};">  ✓ 所有验证通过，固件包完整有效!</span>')
+            lines.append("")
+        
+        lines.append("新增内容统计:")
+        lines.append(f"  固定头部:   +{HEADER_SIZE} 字节")
+        lines.append(f"  DynamicSalt: +{DYNAMICSALT_SIZE} 字节")
+        lines.append(f"  Ed25519签名: +{SIGNATURE_SIZE} 字节")
+        lines.append(f"  总计新增:   +{HEADER_SIZE + DYNAMICSALT_SIZE + SIGNATURE_SIZE} 字节")
+        lines.append("=" * 60)
+        
+        return "<pre style='margin: 0; font-family: \"Microsoft YaHei\", \"微软雅黑\", monospace;'>" + "<br>".join(lines) + "</pre>"
+    
+    def _format_hex_dump_html(self, data, base_offset=0, color=None, max_lines=None):
+        lines = []
+        bytes_per_line = 16
+        
+        for i in range(0, len(data), bytes_per_line):
+            if max_lines and i // bytes_per_line >= max_lines:
+                break
+            
+            chunk = data[i:i + bytes_per_line]
+            offset = base_offset + i
+            
+            hex_part = ' '.join(f'{b:02X}' for b in chunk)
+            hex_part = hex_part.ljust(47)
+            
+            ascii_part = ''.join(chr(b) if 32 <= b < 127 else '.' for b in chunk)
+            
+            line = f"  0x{offset:04X}: {hex_part}  {ascii_part}"
+            if color:
+                lines.append(f'<span style="color: {color};">{self._escape_html(line)}</span>')
+            else:
+                lines.append(line)
+        
+        return lines
+
+
 class FirmwareHeader_Widget(QWidget):
     def __init__(self):
         super().__init__()
@@ -253,6 +887,8 @@ class FirmwareHeader_Widget(QWidget):
         self.package_thread = None
         self.ed25519_private_key_pem = None
         self.public_key_bytes = None
+        self.last_input_file = None
+        self.last_output_file = None
 
         self._init_file_ui()
         self._init_header_editor_ui()
@@ -517,6 +1153,11 @@ class FirmwareHeader_Widget(QWidget):
         btn_hlayout.addWidget(self.verify_button)
 
         operations_layout.addLayout(btn_hlayout)
+
+        self.compare_button = PushButton(FIF.CAMERA, "查看打包对比", self)
+        self.compare_button.setToolTip("打开打包对比窗口，查看打包前后的数据结构")
+        self.compare_button.clicked.connect(self._open_compare_dialog)
+        operations_layout.addWidget(self.compare_button)
 
         self.backup_checkbox = CheckBox("写入前备份原文件", self)
         self.backup_checkbox.setChecked(True)
@@ -1017,7 +1658,8 @@ class FirmwareHeader_Widget(QWidget):
 
             self._log("=" * 60)
             self._log("头部解析成功:")
-            self._log(f"  魔术字:           {header.magic}")
+            magic_display = header.magic.decode('utf-8', errors='replace').replace('\x01', '\\x01')
+            self._log(f"  魔术字:           {magic_display} (0x{header.magic.hex().upper()})")
             self._log(f"  头部版本:         {header.header_version}")
             self._log(f"  固件版本:         {header.get_version_string()}")
             self._log(f"  载荷总大小:       {header.total_payload_size} 字节 (Salt+IV+密文)")
@@ -1219,6 +1861,9 @@ class FirmwareHeader_Widget(QWidget):
             self._log(f"  头部校验和:   {header.header_checksum.hex()}")
             self._log("=" * 60)
 
+            self.last_input_file = input_file
+            self.last_output_file = output_file
+
             self.package_button.setEnabled(False)
             self.parse_button.setEnabled(False)
 
@@ -1265,6 +1910,28 @@ class FirmwareHeader_Widget(QWidget):
                 duration=3000,
                 parent=self,
             )
+            
+            if self.last_input_file and self.last_output_file:
+                self._show_compare_dialog(self.last_input_file, self.last_output_file)
+
+    def _show_compare_dialog(self, before_file, after_file):
+        devkey_hex = self.devkey_lineedit.text().strip()
+        devkey = bytes.fromhex(devkey_hex) if devkey_hex and len(devkey_hex) == 32 else None
+        
+        dialog = PackCompareDialog(
+            before_file=before_file, 
+            after_file=after_file, 
+            parent=self,
+            devkey=devkey,
+            public_key_bytes=self.public_key_bytes,
+            expected_header=self.header,
+            expected_dynamic_salt=bytes.fromhex(self.dynamicsalt_lineedit.text().strip()) if self.dynamicsalt_lineedit.text().strip() else None
+        )
+        dialog.show()
+
+    def _open_compare_dialog(self):
+        dialog = PackCompareDialog(parent=self)
+        dialog.show()
 
     def _on_package_error(self, error):
         self.package_button.setEnabled(True)
