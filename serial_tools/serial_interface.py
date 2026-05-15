@@ -293,10 +293,6 @@ class TerminalTextEdit(PlainTextEdit):
         self._setup_document()
         
         self._current_command = ""
-        self._sent_commands = []
-        self._command_start_positions = []
-        self._send_color = QColor(0, 0, 255)
-        self._msh_prompt_detected = False
 
     def _setup_font(self):
         font = QFont("FiraMono Nerd Font", 10)
@@ -337,9 +333,6 @@ class TerminalTextEdit(PlainTextEdit):
             
             self._display_buffer += text
             self._pyte_terminal.feed(text)
-            
-            if "msh >" in text or "msh>" in text:
-                self._msh_prompt_detected = True
             
             self._schedule_update()
         else:
@@ -404,25 +397,13 @@ class TerminalTextEdit(PlainTextEdit):
                 if not text:
                     continue
                 
-                use_send_color = False
-                if self._msh_prompt_detected and self._sent_commands:
-                    for cmd in self._sent_commands:
-                        if cmd in text:
-                            use_send_color = True
-                            break
-                
-                if use_send_color:
-                    char_format = QTextCharFormat()
-                    char_format.setForeground(self._send_color)
-                    cursor.insertText(text, char_format)
-                else:
-                    char_format = self._get_char_format(
-                        segment.get('fg'),
-                        segment.get('bg'),
-                        segment.get('bold', False),
-                        segment.get('underline', False)
-                    )
-                    cursor.insertText(text, char_format)
+                char_format = self._get_char_format(
+                    segment.get('fg'),
+                    segment.get('bg'),
+                    segment.get('bold', False),
+                    segment.get('underline', False)
+                )
+                cursor.insertText(text, char_format)
         
         cursor.endEditBlock()
         self.setTextCursor(cursor)
@@ -434,14 +415,8 @@ class TerminalTextEdit(PlainTextEdit):
         self._display_buffer = ""
         self._last_line_count = 0
         self._current_command = ""
-        self._sent_commands = []
-        self._command_start_positions = []
-        self._msh_prompt_detected = False
         self.clear()
     
-    def set_send_color(self, color):
-        self._send_color = color
-
     def paintEvent(self, event):
         super().paintEvent(event)
         if hasattr(self, '_theme'):
@@ -457,13 +432,6 @@ class TerminalTextEdit(PlainTextEdit):
     def keyPressEvent(self, event: QKeyEvent):
         if self._terminal_mode:
             if event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
-                if self._current_command.strip():
-                    self._sent_commands.append(self._current_command.strip())
-                    cursor_pos = self._pyte_terminal.get_cursor_position()
-                    self._command_start_positions.append({
-                        'command': self._current_command.strip(),
-                        'y': cursor_pos[1]
-                    })
                 self._current_command = ""
                 self.send_data.emit("\r")
                 return
@@ -706,20 +674,11 @@ class Serial_Tools_Widget(QWidget):
     def _on_theme_changed(self):
         if isDarkTheme():
             receive_color = cfg.get(cfg.serialReceiveTextColorDark)
-            send_color = cfg.get(cfg.serialSendTextColorDark)
         else:
             receive_color = cfg.get(cfg.serialReceiveTextColorLight)
-            send_color = cfg.get(cfg.serialSendTextColorLight)
         
         if hasattr(self, 'receive_color_button'):
             self.receive_color_button.setColor(receive_color if receive_color.isValid() else QColor())
-        if hasattr(self, 'send_color_button'):
-            self.send_color_button.setColor(send_color if send_color.isValid() else QColor(0, 0, 255))
-        
-        if send_color and send_color.isValid():
-            self.reception_area_text.set_send_color(send_color)
-        else:
-            self.reception_area_text.set_send_color(QColor(0, 0, 255))
 
     def _update_left_panel_width(self):
         current_widget = self.stackedWidget.currentWidget()
@@ -1242,16 +1201,6 @@ class Serial_Tools_Widget(QWidget):
         send_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferQuality)
         self.send_area_text.setFont(send_font)
         self.send_area_fontsize_spinBox.setValue(cfg.get(cfg.serialSendFontSize))
-        
-        if isDarkTheme():
-            send_color = cfg.get(cfg.serialSendTextColorDark)
-        else:
-            send_color = cfg.get(cfg.serialSendTextColorLight)
-        
-        if send_color and send_color.isValid():
-            self.reception_area_text.set_send_color(send_color)
-        else:
-            self.reception_area_text.set_send_color(QColor(0, 0, 255))
 
     def on_dtr_changed(self, checked):
         cfg.set(cfg.serialDtrState, checked)
@@ -1297,11 +1246,6 @@ class Serial_Tools_Widget(QWidget):
             cfg.set(cfg.serialSendTextColorDark, color)
         else:
             cfg.set(cfg.serialSendTextColorLight, color)
-        
-        if color.isValid():
-            self.reception_area_text.set_send_color(color)
-        else:
-            self.reception_area_text.set_send_color(QColor(0, 0, 255))
         
         color_text = color.name(QColor.NameFormat.HexRgb) if color.isValid() else "默认"
         theme_text = "深色主题" if isDarkTheme() else "浅色主题"

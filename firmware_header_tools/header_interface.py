@@ -47,7 +47,7 @@ except ImportError:
     CRYPTO_AVAILABLE = False
 
 
-FIRMWARE_MAGIC = b'IAP\x01'
+FIRMWARE_MAGIC = b'IAP\x01'  # STM32小端序: 内存中 0x49 0x41 0x50 0x01; 作为uint32读取为 0x01504149
 HEADER_VERSION = 1
 HEADER_SIZE = 64
 HEADER_PREFIX_SIZE = 32
@@ -652,6 +652,7 @@ class PackCompareDialog(QWidget):
                     errors.append("魔术字无效")
                 
                 lines.append(f"  魔术字:           0x{header.magic.hex().upper()} {magic_status}")
+                lines.append(f"    STM32小端序: 内存中 0x49 0x41 0x50 0x01; 作为uint32读取为 0x01504149")
                 lines.append(f"  头部版本:         {header.header_version}")
                 lines.append(f"  固件版本:         {header.get_version_string()}")
                 lines.append(f"  载荷总大小:       {header.total_payload_size} 字节")
@@ -946,7 +947,7 @@ class FirmwareHeader_Widget(QWidget):
         self.magic_lineedit = LineEdit()
         self.magic_lineedit.setText(f"{FIRMWARE_MAGIC[:3].decode('ascii')}\\x{FIRMWARE_MAGIC[3]:02X}")
         self.magic_lineedit.setReadOnly(True)
-        self.magic_lineedit.setToolTip(f"4字节魔术字，固定值 (Hex: {FIRMWARE_MAGIC.hex().upper()})")
+        self.magic_lineedit.setToolTip(f"4字节魔术字，固定值 (Hex: {FIRMWARE_MAGIC.hex().upper()})\nSTM32小端序: 内存中 0x49 0x41 0x50 0x01; 作为uint32读取为 0x01504149")
         editor_layout.addWidget(magic_label, row, 0)
         editor_layout.addWidget(self.magic_lineedit, row, 1)
 
@@ -1660,6 +1661,7 @@ class FirmwareHeader_Widget(QWidget):
             self._log("头部解析成功:")
             magic_display = header.magic.decode('utf-8', errors='replace').replace('\x01', '\\x01')
             self._log(f"  魔术字:           {magic_display} (0x{header.magic.hex().upper()})")
+            self._log(f"    STM32小端序: 内存中 0x49 0x41 0x50 0x01; 作为uint32读取为 0x01504149")
             self._log(f"  头部版本:         {header.header_version}")
             self._log(f"  固件版本:         {header.get_version_string()}")
             self._log(f"  载荷总大小:       {header.total_payload_size} 字节 (Salt+IV+密文)")
@@ -1988,6 +1990,8 @@ class FirmwareHeader_Widget(QWidget):
 
             self._log("=" * 60)
             self._log("验证固件签名...")
+            self._log(f"  魔术字:           0x{header.magic.hex().upper()} {'✓ 有效' if header.validate_magic() else '✗ 无效'}")
+            self._log(f"    STM32小端序: 内存中 0x49 0x41 0x50 0x01; 作为uint32读取为 0x01504149")
 
             devkey_hex = self.devkey_lineedit.text().strip()
             if devkey_hex:
