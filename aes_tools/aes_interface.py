@@ -1,6 +1,7 @@
 # coding:utf-8
 import sys
 import os
+import hashlib
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget,
@@ -55,16 +56,17 @@ def hkdf_expand(prk: bytes, info: bytes, length: int) -> bytes:
 
 class AES_Encrypt_Thread(QThread):
     progress_updated = pyqtSignal(int, int)
-    encryption_completed = pyqtSignal(bool, str, str)
+    encryption_completed = pyqtSignal(bool, str, str, str)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, input_file, output_file, key, iv=None, mode='CBC'):
+    def __init__(self, input_file, output_file, key, iv=None, mode='CBC', append_sha256=True):
         super().__init__()
         self.input_file = input_file
         self.output_file = output_file
         self.key = key
         self.iv = iv
         self.mode = mode
+        self.append_sha256 = append_sha256
 
     def run(self):
         if not CRYPTO_AVAILABLE:
@@ -78,6 +80,11 @@ class AES_Encrypt_Thread(QThread):
 
             with open(self.input_file, 'rb') as f_in:
                 data = f_in.read()
+
+            original_sha256 = hashlib.sha256(data).digest()
+
+            if self.append_sha256:
+                data = data + original_sha256
 
             if self.mode == 'CBC':
                 if self.iv is None:
@@ -109,7 +116,7 @@ class AES_Encrypt_Thread(QThread):
                 f_out.write(encrypted_data)
 
             self.progress_updated.emit(100, 100)
-            self.encryption_completed.emit(True, self.output_file, f"加密完成，输出文件: {self.output_file}")
+            self.encryption_completed.emit(True, self.output_file, f"加密完成，输出文件: {self.output_file}", original_sha256.hex())
 
         except Exception as e:
             self.error_occurred.emit(f"加密失败: {str(e)}")
@@ -117,16 +124,17 @@ class AES_Encrypt_Thread(QThread):
 
 class AES_Decrypt_Thread(QThread):
     progress_updated = pyqtSignal(int, int)
-    decryption_completed = pyqtSignal(bool, str, str)
+    decryption_completed = pyqtSignal(bool, str, str, bool, str)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, input_file, output_file, key, iv=None, mode='CBC'):
+    def __init__(self, input_file, output_file, key, iv=None, mode='CBC', append_sha256=False):
         super().__init__()
         self.input_file = input_file
         self.output_file = output_file
         self.key = key
         self.iv = iv
         self.mode = mode
+        self.append_sha256 = append_sha256
 
     def run(self):
         if not CRYPTO_AVAILABLE:
@@ -158,11 +166,28 @@ class AES_Decrypt_Thread(QThread):
 
             decrypted_data = unpad(cipher.decrypt(data), AES.block_size)
 
+            sha256_valid = False
+            original_sha256_hex = ""
+            
+            if self.append_sha256:
+                if len(decrypted_data) < 32:
+                    self.error_occurred.emit("解密数据长度不足，无法提取SHA256校验值")
+                    return
+                
+                stored_sha256 = decrypted_data[-32:]
+                actual_data = decrypted_data[:-32]
+                calculated_sha256 = hashlib.sha256(actual_data).digest()
+                
+                sha256_valid = (stored_sha256 == calculated_sha256)
+                original_sha256_hex = stored_sha256.hex()
+                
+                decrypted_data = actual_data
+
             with open(self.output_file, 'wb') as f_out:
                 f_out.write(decrypted_data)
 
             self.progress_updated.emit(100, 100)
-            self.decryption_completed.emit(True, self.output_file, f"解密完成，输出文件: {self.output_file}")
+            self.decryption_completed.emit(True, self.output_file, f"解密完成，输出文件: {self.output_file}", sha256_valid, original_sha256_hex)
 
         except Exception as e:
             self.error_occurred.emit(f"解密失败: {str(e)}")
@@ -269,9 +294,15 @@ class AES_Tools_Widget(QWidget):
         iv_hlayout.setContentsMargins(0, 2, 0, 2)
         key_layout.addLayout(iv_hlayout)
 
-        self.save_key_checkbox = CheckBox("保存密钥和IV到文件", self)
+        checkbox_hlayout = QHBoxLayout()
+        self.save_key_checkbox = CheckBox("保存密钥/IV", self)
         self.save_key_checkbox.setChecked(True)
-        key_layout.addWidget(self.save_key_checkbox)
+        checkbox_hlayout.addWidget(self.save_key_checkbox)
+        self.append_sha256_checkbox = CheckBox("加密前追加固件SHA256值", self)
+        self.append_sha256_checkbox.setChecked(True)
+        checkbox_hlayout.addWidget(self.append_sha256_checkbox)
+        checkbox_hlayout.addStretch(1)
+        key_layout.addLayout(checkbox_hlayout)
 
         self.key_group.setLayout(key_layout)
         main_layout.addWidget(self.key_group)
@@ -761,6 +792,8 @@ class AES_Tools_Widget(QWidget):
         self.output_area_text.appendPlainText(f"密钥长度: {len(key) * 8} bits")
         if iv:
             self.output_area_text.appendPlainText(f"IV长度: {len(iv) * 8} bits")
+        append_sha256 = self.append_sha256_checkbox.isChecked()
+        self.output_area_text.appendPlainText(f"追加SHA256: {'是' if append_sha256 else '否'}")
 
         self.progress_bar.setValue(0)
         self.progress_label.setText("正在加密...")
@@ -774,7 +807,8 @@ class AES_Tools_Widget(QWidget):
             output_file=output_file,
             key=key,
             iv=iv,
-            mode=mode
+            mode=mode,
+            append_sha256=append_sha256
         )
         self.encryption_thread.progress_updated.connect(self.on_progress_updated)
         self.encryption_thread.encryption_completed.connect(self.on_encryption_completed)
@@ -876,6 +910,8 @@ class AES_Tools_Widget(QWidget):
                     )
                     return
 
+        append_sha256 = self.append_sha256_checkbox.isChecked()
+        
         self.output_area_text.clear()
         self.output_area_text.appendPlainText("=" * 74)
         self.output_area_text.appendPlainText("开始AES-256解密...")
@@ -887,6 +923,7 @@ class AES_Tools_Widget(QWidget):
             self.output_area_text.appendPlainText(f"IV长度: {len(iv) * 8} bits (使用提供的IV)")
         else:
             self.output_area_text.appendPlainText("IV: 将从加密文件中读取")
+        self.output_area_text.appendPlainText(f"校验SHA256: {'是' if append_sha256 else '否'}")
 
         self.progress_bar.setValue(0)
         self.progress_label.setText("正在解密...")
@@ -900,7 +937,8 @@ class AES_Tools_Widget(QWidget):
             output_file=output_file,
             key=key,
             iv=iv,
-            mode=mode
+            mode=mode,
+            append_sha256=append_sha256
         )
         self.decryption_thread.progress_updated.connect(self.on_progress_updated)
         self.decryption_thread.decryption_completed.connect(self.on_decryption_completed)
@@ -911,9 +949,11 @@ class AES_Tools_Widget(QWidget):
         self.progress_bar.setValue(progress)
         self.progress_label.setText(f"进度: {progress}%")
 
-    def on_encryption_completed(self, success, output_file, message):
+    def on_encryption_completed(self, success, output_file, message, original_sha256_hex=""):
         if success:
             self.output_area_text.appendPlainText(message)
+            if original_sha256_hex:
+                self.output_area_text.appendPlainText(f"固件原始SHA256: {original_sha256_hex}")
             self.progress_bar.setValue(100)
             self.progress_label.setText("加密完成")
             
@@ -938,6 +978,8 @@ class AES_Tools_Widget(QWidget):
                         f.write(f"DynamicSalt: {dynamicsalt_hex}\n")
                     if devkey_hex and uid_hex and dynamicsalt_hex:
                         f.write(f"Algorithm: HKDF-Extract-Expand-SHA256\n")
+                    if original_sha256_hex:
+                        f.write(f"OriginalSHA256: {original_sha256_hex}\n")
                         
                 self.output_area_text.appendPlainText(f"密钥文件已保存: {key_file}")
             
@@ -967,21 +1009,38 @@ class AES_Tools_Widget(QWidget):
         self.decrypt_button.setEnabled(True)
         self.encrypt_button.setText("执行加密")
 
-    def on_decryption_completed(self, success, output_file, message):
+    def on_decryption_completed(self, success, output_file, message, sha256_valid=False, original_sha256_hex=""):
         if success:
             self.output_area_text.appendPlainText(message)
+            if original_sha256_hex:
+                self.output_area_text.appendPlainText(f"原始SHA256: {original_sha256_hex}")
+                if sha256_valid:
+                    self.output_area_text.appendPlainText("SHA256校验: 通过 ✓")
+                else:
+                    self.output_area_text.appendPlainText("SHA256校验: 失败 ✗")
             self.progress_bar.setValue(100)
             self.progress_label.setText("解密完成")
             
-            InfoBar.success(
-                title="解密成功",
-                content=f"固件已成功解密",
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=3000,
-                parent=self,
-            )
+            if original_sha256_hex and not sha256_valid:
+                InfoBar.warning(
+                    title="解密完成（校验失败）",
+                    content="固件已解密，但SHA256校验失败，数据可能已损坏",
+                    orient=Qt.Orientation.Horizontal,
+                    isClosable=True,
+                    position=InfoBarPosition.TOP,
+                    duration=5000,
+                    parent=self,
+                )
+            else:
+                InfoBar.success(
+                    title="解密成功",
+                    content=f"固件已成功解密",
+                    orient=Qt.Orientation.Horizontal,
+                    isClosable=True,
+                    position=InfoBarPosition.TOP,
+                    duration=3000,
+                    parent=self,
+                )
         else:
             self.output_area_text.appendPlainText("解密失败")
             self.progress_label.setText("解密失败")
