@@ -1116,8 +1116,8 @@ class FirmwareHeader_Widget(QWidget):
 
         public_key_label = BodyLabel("公钥 (Hex, 32字节):")
         self.public_key_lineedit = LineEdit()
-        self.public_key_lineedit.setPlaceholderText("64个十六进制字符")
-        self.public_key_lineedit.setReadOnly(True)
+        self.public_key_lineedit.setPlaceholderText("64个十六进制字符，可手动输入")
+        self.public_key_lineedit.textChanged.connect(self._on_public_key_edited)
         public_key_hlayout = QHBoxLayout()
         public_key_hlayout.addWidget(public_key_label)
         public_key_hlayout.addWidget(self.public_key_lineedit, 1)
@@ -1407,6 +1407,18 @@ class FirmwareHeader_Widget(QWidget):
                 parent=self,
             )
 
+    def _on_public_key_edited(self, text):
+        hex_str = text.strip()
+        if len(hex_str) == 64:
+            try:
+                self.public_key_bytes = bytes.fromhex(hex_str)
+                public_c_array = ', '.join([f'0x{hex_str[i:i+2]}' for i in range(0, 64, 2)])
+                self._log(f"公钥C数组: {{{public_c_array}}}")
+            except ValueError:
+                self.public_key_bytes = None
+        else:
+            self.public_key_bytes = None
+
     def _pem_to_hex(self, pem_str):
         pem_content = pem_str.replace('\n', '')
         pem_content = pem_content.replace('-----BEGIN PRIVATE KEY-----', '')
@@ -1449,6 +1461,10 @@ class FirmwareHeader_Widget(QWidget):
             self._log("Ed25519密钥对生成成功")
             self._log(f"  私钥: {private_hex}")
             self._log(f"  公钥: {self.public_key_bytes.hex()}")
+            self._log("")
+            self._log("C数组格式:")
+            public_c_array = ', '.join([f'0x{self.public_key_bytes.hex()[i:i+2]}' for i in range(0, 64, 2)])
+            self._log(f"  公钥: {{{public_c_array}}}")
 
             InfoBar.success(
                 title="密钥生成成功",
@@ -1503,6 +1519,9 @@ class FirmwareHeader_Widget(QWidget):
                 self.public_key_lineedit.setText(self.public_key_bytes.hex())
 
                 self._log(f"Ed25519私钥加载成功: {file_path}")
+                self._log(f"  公钥: {self.public_key_bytes.hex()}")
+                public_c_array = ', '.join([f'0x{self.public_key_bytes.hex()[i:i+2]}' for i in range(0, 64, 2)])
+                self._log(f"  公钥C数组: {{{public_c_array}}}")
 
                 InfoBar.success(
                     title="加载成功",
