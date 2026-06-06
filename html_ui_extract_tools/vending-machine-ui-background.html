@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <title>享购 SnackGo 智能售货终端 - 背景模板</title>
+    <script src="https://modao.cc/agent-py/static/source/js/tailwindcss.js"></script>
+    <script src="https://modao.cc/agent-py/static/source/js/iconify-icon.min.js"></script>
+    <style>
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+          Arial, sans-serif;
+        background-color: #1a1a1a;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body class="overflow-hidden">
+    <div
+      class="w-[800px] h-[480px] bg-gradient-to-br from-[#FFE8C0] via-[#FFE8C0] to-[#F5C000] overflow-hidden relative shadow-2xl flex flex-col"
+      id="app"
+    >
+      <!-- 顶部Logo区域 -->
+      <header
+        class="h-[100px] flex items-center px-4 shrink-0 gap-4 bg-white/30"
+      >
+        <!-- Logo & Slogan -->
+        <div class="flex flex-col shrink-0 w-[140px]">
+          <div class="flex items-center gap-1">
+            <div
+              class="w-8 h-8 bg-[#FF6B35] rounded-lg flex items-center justify-center text-white"
+            >
+              <iconify-icon icon="mdi:cart-variant" width="20"></iconify-icon>
+            </div>
+            <span class="text-2xl font-black text-[#FF6B35] tracking-tight"
+              >享购</span
+            >
+          </div>
+          <span
+            class="text-[10px] text-gray-500 font-medium tracking-widest mt-0.5"
+            >SNACK GO · 鲜享生活</span
+          >
+        </div>
+        <!-- 状态信息占位 -->
+        <div
+          class="flex flex-col items-end shrink-0 w-[100px] text-gray-600 ml-auto"
+        ></div>
+      </header>
+
+      <!-- 分类导航栏占位 -->
+      <nav
+        class="h-[50px] px-4 flex items-center gap-3 shrink-0 bg-white/20"
+      ></nav>
+
+      <!-- 商品展示区占位 -->
+      <main
+        class="flex-1 px-4 py-2 overflow-hidden bg-gradient-to-r from-[#FFE8C0] via-[#FFE0A0] to-[#FFD080]"
+      ></main>
+
+      <!-- 支付方式区域 -->
+      <section
+        class="h-[50px] px-4 flex items-center justify-between shrink-0 bg-white/40 backdrop-blur-sm border-t border-orange-100"
+      >
+        <div class="flex items-center gap-4">
+          <div class="flex items-center gap-1.5 opacity-70">
+            <iconify-icon
+              class="text-green-500"
+              icon="ri:wechat-pay-fill"
+              width="24"
+            ></iconify-icon>
+            <span class="text-[12px] font-medium text-gray-600">微信支付</span>
+          </div>
+          <div class="flex items-center gap-1.5 opacity-70">
+            <iconify-icon
+              class="text-blue-500"
+              icon="ri:alipay-fill"
+              width="24"
+            ></iconify-icon>
+            <span class="text-[12px] font-medium text-gray-600">支付宝</span>
+          </div>
+          <div class="flex items-center gap-1.5 opacity-70">
+            <iconify-icon
+              class="text-indigo-500"
+              icon="mdi:face-recognition"
+              width="24"
+            ></iconify-icon>
+            <span class="text-[12px] font-medium text-gray-600">刷脸支付</span>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-sm text-orange-600 font-bold"
+            >扫码开门，关门自动结算</span
+          >
+          <div class="w-2 h-2 rounded-full bg-orange-500 animate-pulse"></div>
+        </div>
+      </section>
+
+      <!-- 底部操作栏 -->
+      <footer
+        class="h-[60px] bg-white border-t border-gray-100 flex items-center px-4 gap-4 shrink-0 shadow-[0_-4px_10px_rgba(0,0,0,0.05)]"
+      >
+        <!-- 购物车入口 -->
+        <div class="relative">
+          <div
+            class="w-11 h-11 bg-gray-100 rounded-xl flex items-center justify-center text-gray-600"
+          >
+            <iconify-icon icon="mdi:cart" width="24"></iconify-icon>
+          </div>
+        </div>
+        <!-- 总额显示 -->
+        <div class="flex flex-col">
+          <span
+            class="text-[10px] text-gray-400 font-bold uppercase tracking-wider"
+            >Total Amount</span
+          >
+          <div class="flex items-baseline gap-1">
+            <span class="text-xs font-bold text-[#FF6B35]">合计:</span>
+            <span class="text-2xl font-black text-[#FF6B35]">¥0.00</span>
+          </div>
+        </div>
+        <!-- 核心 CTA 按钮占位 -->
+        <div class="ml-auto px-8 h-[44px]"></div>
+      </footer>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>享购 SnackGo 智能售货终端</title>
+<script src="https://modao.cc/agent-py/static/source/js/tailwindcss.js"></script>
+<script src="https://modao.cc/agent-py/static/source/js/iconify-icon.min.js"></script>
+<style>
+        @keyframes pulse-soft {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.05); opacity: 0.9; }
+        }
+        .animate-pulse-soft {
+            animation: pulse-soft 2s infinite ease-in-out;
+        }
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .category-active {
+            background-color: #FF6B35;
+            color: white;
+            box-shadow: 0 4px 6px -1px rgba(255, 107, 53, 0.3);
+        }
+        .cart-overlay {
+            transition: transform 0.3s ease-out;
+            transform: translateY(100%);
+        }
+        .cart-overlay.active {
+            transform: translateY(0);
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #1a1a1a; /* 模拟外框颜色 */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+    </style>
+</head>
+<body class="overflow-hidden">
+<!-- 800x480 固定尺寸容器 -->
+<div class="w-[800px] h-[480px] bg-gradient-to-br from-[#FFF8F0] via-[#FFF8F0] to-[#FEE440] overflow-hidden relative shadow-2xl flex flex-col" id="app">
+<!-- 1. 顶部区域 (100px) -->
+<header class="h-[100px] flex items-center px-4 shrink-0 gap-4">
+<!-- Logo & Slogan -->
+<div class="flex flex-col shrink-0 w-[140px]">
+<div class="flex items-center gap-1">
+<div class="w-8 h-8 bg-[#FF6B35] rounded-lg flex items-center justify-center text-white">
+<iconify-icon icon="mdi:cart-variant" width="20"></iconify-icon>
+</div>
+<span class="text-2xl font-black text-[#FF6B35] tracking-tight">享购</span>
+</div>
+<span class="text-[10px] text-gray-500 font-medium tracking-widest mt-0.5">SNACK GO · 鲜享生活</span>
+</div>
+<!-- Banner 轮播 (中部) -->
+<div class="flex-1 h-[80px] bg-white rounded-2xl relative overflow-hidden shadow-sm border border-orange-100">
+<div class="flex transition-transform duration-500 h-full" id="banner-container">
+<div class="min-w-full h-full flex items-center px-6 bg-gradient-to-r from-orange-50 to-white">
+<div class="flex-1">
+<h3 class="text-orange-600 font-bold text-lg">新品上市：岩烧海苔薯片</h3>
+<p class="text-orange-400 text-xs">第二份半价，快来抢购吧！</p>
+</div>
+<img alt="New Arrival Chips" class="h-16 w-24 object-contain" src="https://modao.cc/agent-py/media/generated_images/2026-05-27/e9b345045563401b865de5f37c76363f.jpg"/>
+</div>
+<div class="min-w-full h-full flex items-center px-6 bg-gradient-to-r from-pink-50 to-white">
+<div class="flex-1">
+<h3 class="text-pink-600 font-bold text-lg">夏日饮品：劲爽冰镇可乐</h3>
+<p class="text-pink-400 text-xs">清凉一夏，仅需 ¥3.5</p>
+</div>
+<img alt="Cold Cola" class="h-16 w-24 object-contain" src="https://modao.cc/agent-py/media/generated_images/2026-05-27/2be8c40dcb23403d85c21861b42f5482.jpg"/>
+</div>
+<div class="min-w-full h-full flex items-center px-6 bg-gradient-to-r from-blue-50 to-white">
+<div class="flex-1">
+<h3 class="text-blue-600 font-bold text-lg">全场满减：满20元减3元</h3>
+<p class="text-blue-400 text-xs">扫码开门，多买多省</p>
+</div>
+<img alt="Promotion Discount" class="h-16 w-24 object-contain" src="https://modao.cc/agent-py/media/generated_images/2026-05-27/f9304cb189ad4da6939186448c9ac865.jpg"/>
+</div>
+</div>
+<!-- 指示器 -->
+<div class="absolute bottom-2 right-4 flex gap-1.5">
+<div class="banner-dot w-1.5 h-1.5 rounded-full bg-orange-500"></div>
+<div class="banner-dot w-1.5 h-1.5 rounded-full bg-gray-300"></div>
+<div class="banner-dot w-1.5 h-1.5 rounded-full bg-gray-300"></div>
+</div>
+</div>
+<!-- 状态信息 -->
+<div class="flex flex-col items-end shrink-0 w-[100px] text-gray-600">
+<div class="text-xl font-bold font-mono" id="current-time">09:41</div>
+<div class="flex items-center gap-2 mt-1">
+<iconify-icon icon="mdi:wifi" width="16"></iconify-icon>
+<span class="text-xs font-medium">4℃</span>
+<iconify-icon class="text-blue-500" icon="mdi:thermometer" width="16"></iconify-icon>
+</div>
+</div>
+</header>
+<!-- 2. 分类导航栏 (50px) -->
+<nav class="h-[50px] px-4 flex items-center gap-3 overflow-x-auto no-scrollbar shrink-0">
+<button class="category-btn category-active px-5 py-1.5 rounded-full text-sm font-bold whitespace-nowrap">全部</button>
+<button class="category-btn bg-white/60 text-gray-600 px-5 py-1.5 rounded-full text-sm font-bold whitespace-nowrap border border-gray-100">热门推荐</button>
+<button class="category-btn bg-white/60 text-gray-600 px-5 py-1.5 rounded-full text-sm font-bold whitespace-nowrap border border-gray-100">休闲零食</button>
+<button class="category-btn bg-white/60 text-gray-600 px-5 py-1.5 rounded-full text-sm font-bold whitespace-nowrap border border-gray-100">清凉饮品</button>
+<button class="category-btn bg-white/60 text-gray-600 px-5 py-1.5 rounded-full text-sm font-bold whitespace-nowrap border border-gray-100">巧克力</button>
+<button class="category-btn bg-white/60 text-gray-600 px-5 py-1.5 rounded-full text-sm font-bold whitespace-nowrap border border-gray-100">饼干糕点</button>
+<button class="category-btn bg-white/60 text-gray-600 px-5 py-1.5 rounded-full text-sm font-bold whitespace-nowrap border border-gray-100">方便速食</button>
+</nav>
+<!-- 3. 商品展示区 (220px) -->
+<main class="flex-1 px-4 py-2 overflow-hidden">
+<div class="grid grid-cols-3 grid-rows-2 gap-3 h-full">
+<!-- 商品 1 -->
+<div class="bg-white rounded-xl shadow-sm border border-orange-50 p-2 flex gap-3 relative overflow-hidden group active:scale-95 transition-transform">
+<div class="absolute top-0 left-0 bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-br-lg font-bold">热卖</div>
+<img alt="Lays Chips" class="w-20 h-20 object-contain rounded-lg bg-gray-50 p-1" src="https://modao.cc/agent-py/media/generated_images/2026-05-27/28860c0bacb44bdbb006d8a813ad455e.jpg"/>
+<div class="flex flex-col justify-between flex-1 py-1">
+<h4 class="text-sm font-bold text-gray-800 line-clamp-2 leading-tight">乐事原味薯片 70g</h4>
+<div class="flex items-center justify-between">
+<span class="text-lg font-black text-[#FF6B35]">¥6.5</span>
+<button class="w-8 h-8 rounded-full bg-[#FF6B35] text-white flex items-center justify-center shadow-md active:bg-orange-600" onclick="addToCart('乐事原味薯片', 6.5)">
+<iconify-icon icon="mdi:plus" width="20"></iconify-icon>
+</button>
+</div>
+</div>
+</div>
+<!-- 商品 2 -->
+<div class="bg-white rounded-xl shadow-sm border border-orange-50 p-2 flex gap-3 relative overflow-hidden active:scale-95 transition-transform">
+<img alt="Dove Chocolate" class="w-20 h-20 object-contain rounded-lg bg-gray-50 p-1" src="https://modao.cc/agent-py/media/generated_images/2026-05-27/aafaf8e571744fd788444e4733cf25d3.jpg"/>
+<div class="flex flex-col justify-between flex-1 py-1">
+<h4 class="text-sm font-bold text-gray-800 line-clamp-2 leading-tight">德芙丝滑牛奶巧克力</h4>
+<div class="flex items-center justify-between">
+<span class="text-lg font-black text-[#FF6B35]">¥12.0</span>
+<button class="w-8 h-8 rounded-full bg-[#FF6B35] text-white flex items-center justify-center shadow-md active:bg-orange-600" onclick="addToCart('德芙巧克力', 12.0)">
+<iconify-icon icon="mdi:plus" width="20"></iconify-icon>
+</button>
+</div>
+</div>
+</div>
+<!-- 商品 3 -->
+<div class="bg-white rounded-xl shadow-sm border border-orange-50 p-2 flex gap-3 relative overflow-hidden active:scale-95 transition-transform">
+<div class="absolute top-0 left-0 bg-blue-500 text-white text-[10px] px-2 py-0.5 rounded-br-lg font-bold">新品</div>
+<img alt="Coca Cola" class="w-20 h-20 object-contain rounded-lg bg-gray-50 p-1" src="https://modao.cc/agent-py/media/generated_images/2026-05-27/a25f4406c3fb45928e5b09801286042e.jpg"/>
+<div class="flex flex-col justify-between flex-1 py-1">
+<h4 class="text-sm font-bold text-gray-800 line-clamp-2 leading-tight">可口可乐 500ml</h4>
+<div class="flex items-center justify-between">
+<span class="text-lg font-black text-[#FF6B35]">¥3.5</span>
+<button class="w-8 h-8 rounded-full bg-[#FF6B35] text-white flex items-center justify-center shadow-md active:bg-orange-600" onclick="addToCart('可口可乐', 3.5)">
+<iconify-icon icon="mdi:plus" width="20"></iconify-icon>
+</button>
+</div>
+</div>
+</div>
+<!-- 商品 4 -->
+<div class="bg-white rounded-xl shadow-sm border border-orange-50 p-2 flex gap-3 relative overflow-hidden active:scale-95 transition-transform">
+<img alt="Mineral Water" class="w-20 h-20 object-contain rounded-lg bg-gray-50 p-1" src="https://modao.cc/agent-py/media/generated_images/2026-05-27/297657ec268b451e88464b82169757e8.jpg"/>
+<div class="flex flex-col justify-between flex-1 py-1">
+<h4 class="text-sm font-bold text-gray-800 line-clamp-2 leading-tight">农夫山泉 550ml</h4>
+<div class="flex items-center justify-between">
+<span class="text-lg font-black text-[#FF6B35]">¥2.0</span>
+<button class="w-8 h-8 rounded-full bg-[#FF6B35] text-white flex items-center justify-center shadow-md active:bg-orange-600" onclick="addToCart('农夫山泉', 2.0)">
+<iconify-icon icon="mdi:plus" width="20"></iconify-icon>
+</button>
+</div>
+</div>
+</div>
+<!-- 商品 5 -->
+<div class="bg-white rounded-xl shadow-sm border border-orange-50 p-2 flex gap-3 relative overflow-hidden active:scale-95 transition-transform">
+<img alt="Orange Juice" class="w-20 h-20 object-contain rounded-lg bg-gray-50 p-1" src="https://modao.cc/agent-py/media/generated_images/2026-05-27/b256652058b5434cb881fddc6930ca50.jpg"/>
+<div class="flex flex-col justify-between flex-1 py-1">
+<h4 class="text-sm font-bold text-gray-800 line-clamp-2 leading-tight">100% 纯橙汁 300ml</h4>
+<div class="flex items-center justify-between">
+<span class="text-lg font-black text-[#FF6B35]">¥8.8</span>
+<button class="w-8 h-8 rounded-full bg-[#FF6B35] text-white flex items-center justify-center shadow-md active:bg-orange-600" onclick="addToCart('纯橙汁', 8.8)">
+<iconify-icon icon="mdi:plus" width="20"></iconify-icon>
+</button>
+</div>
+</div>
+</div>
+<!-- 商品 6 -->
+<div class="bg-white rounded-xl shadow-sm border border-orange-50 p-2 flex gap-3 relative overflow-hidden active:scale-95 transition-transform">
+<div class="absolute top-0 left-0 bg-yellow-500 text-white text-[10px] px-2 py-0.5 rounded-br-lg font-bold">推荐</div>
+<img alt="Biscuits" class="w-20 h-20 object-contain rounded-lg bg-gray-50 p-1" src="https://modao.cc/agent-py/media/generated_images/2026-05-27/b0e2991af7a4441b8e6fe7939d6a4e31.jpg"/>
+<div class="flex flex-col justify-between flex-1 py-1">
+<h4 class="text-sm font-bold text-gray-800 line-clamp-2 leading-tight">奥利奥夹心饼干</h4>
+<div class="flex items-center justify-between">
+<span class="text-lg font-black text-[#FF6B35]">¥7.5</span>
+<button class="w-8 h-8 rounded-full bg-[#FF6B35] text-white flex items-center justify-center shadow-md active:bg-orange-600" onclick="addToCart('奥利奥饼干', 7.5)">
+<iconify-icon icon="mdi:plus" width="20"></iconify-icon>
+</button>
+</div>
+</div>
+</div>
+</div>
+</main>
+<!-- 4. 支付方式引导 (50px) -->
+<section class="h-[50px] px-4 flex items-center justify-between shrink-0 bg-white/40 backdrop-blur-sm border-t border-orange-100">
+<div class="flex items-center gap-4">
+<div class="flex items-center gap-1.5 opacity-70 grayscale hover:grayscale-0 transition-all">
+<iconify-icon class="text-green-500" icon="ri:wechat-pay-fill" width="24"></iconify-icon>
+<span class="text-[12px] font-medium text-gray-600">微信支付</span>
+</div>
+<div class="flex items-center gap-1.5 opacity-70 grayscale hover:grayscale-0 transition-all">
+<iconify-icon class="text-blue-500" icon="ri:alipay-fill" width="24"></iconify-icon>
+<span class="text-[12px] font-medium text-gray-600">支付宝</span>
+</div>
+<div class="flex items-center gap-1.5 opacity-70 grayscale hover:grayscale-0 transition-all">
+<iconify-icon class="text-indigo-500" icon="mdi:face-recognition" width="24"></iconify-icon>
+<span class="text-[12px] font-medium text-gray-600">刷脸支付</span>
+</div>
+</div>
+<div class="flex items-center gap-2">
+<span class="text-sm text-orange-600 font-bold">扫码开门，关门自动结算</span>
+<div class="w-2 h-2 rounded-full bg-orange-500 animate-pulse"></div>
+</div>
+</section>
+<!-- 5. 底部操作栏 (60px) -->
+<footer class="h-[60px] bg-white border-t border-gray-100 flex items-center px-4 gap-4 shrink-0 shadow-[0_-4px_10px_rgba(0,0,0,0.05)]">
+<!-- 购物车入口 -->
+<div class="relative active:scale-90 transition-transform cursor-pointer" onclick="toggleCart()">
+<div class="w-11 h-11 bg-gray-100 rounded-xl flex items-center justify-center text-gray-600">
+<iconify-icon icon="mdi:cart" width="24"></iconify-icon>
+</div>
+<div class="absolute -top-1.5 -right-1.5 bg-[#FF4D6D] text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center border-2 border-white hidden" id="cart-badge">0</div>
+</div>
+<!-- 总额显示 -->
+<div class="flex flex-col">
+<span class="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Total Amount</span>
+<div class="flex items-baseline gap-1">
+<span class="text-xs font-bold text-[#FF6B35]">合计:</span>
+<span class="text-2xl font-black text-[#FF6B35]" id="total-price">¥0.00</span>
+</div>
+</div>
+<!-- 核心 CTA 按钮 -->
+<button class="ml-auto flex items-center gap-2 bg-gradient-to-r from-[#FF6B35] to-[#FF4D6D] text-white px-8 h-[44px] rounded-full shadow-lg shadow-orange-200 active:scale-95 transition-transform animate-pulse-soft">
+<iconify-icon icon="mdi:qrcode-scan" width="20"></iconify-icon>
+<span class="text-lg font-black tracking-wide">扫码购买</span>
+</button>
+</footer>
+<!-- 6. 购物车浮层 -->
+<div class="absolute inset-0 bg-black/40 z-50 pointer-events-none opacity-0 transition-opacity duration-300" id="cart-modal">
+<div class="absolute bottom-0 left-0 right-0 bg-white rounded-t-[32px] p-6 cart-overlay pointer-events-auto shadow-2xl">
+<div class="flex items-center justify-between mb-4">
+<h3 class="text-xl font-black text-gray-800 flex items-center gap-2">
+<iconify-icon class="text-[#FF6B35]" icon="mdi:cart-outline"></iconify-icon>
+                        已选商品
+                    </h3>
+<button class="text-gray-400 p-1" onclick="toggleCart()">
+<iconify-icon icon="mdi:close" width="24"></iconify-icon>
+</button>
+</div>
+<div class="max-h-[220px] overflow-y-auto no-scrollbar space-y-4 mb-6" id="cart-items">
+<!-- 动态插入商品 -->
+<div class="flex items-center justify-center py-8 text-gray-400 italic">
+                        购物车空空如也，快去挑选吧~
+                    </div>
+</div>
+<div class="flex items-center justify-between pt-4 border-t border-gray-100">
+<div class="flex flex-col">
+<span class="text-xs text-gray-400">结算总额</span>
+<span class="text-2xl font-black text-[#FF6B35]" id="cart-total">¥0.00</span>
+</div>
+<button class="bg-[#FF6B35] text-white px-10 py-3 rounded-2xl font-bold shadow-lg shadow-orange-100 active:bg-orange-600 transition-colors">
+                        去结算
+                    </button>
+</div>
+</div>
+</div>
+</div>
+<script>
+        // 1. 时间更新
+        function updateTime() {
+            const now = new Date();
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            document.getElementById('current-time').textContent = `${hours}:${minutes}`;
+        }
+        setInterval(updateTime, 1000);
+        updateTime();
+
+        // 2. 轮播广告逻辑
+        let currentSlide = 0;
+        const bannerContainer = document.getElementById('banner-container');
+        const dots = document.querySelectorAll('.banner-dot');
+        const totalSlides = 3;
+
+        function nextSlide() {
+            currentSlide = (currentSlide + 1) % totalSlides;
+            bannerContainer.style.transform = `translateX(-${currentSlide * 100}%)`;
+            dots.forEach((dot, index) => {
+                dot.classList.toggle('bg-orange-500', index === currentSlide);
+                dot.classList.toggle('bg-gray-300', index !== currentSlide);
+            });
+        }
+        setInterval(nextSlide, 4000);
+
+        // 3. 分类切换逻辑
+        const categoryBtns = document.querySelectorAll('.category-btn');
+        categoryBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                categoryBtns.forEach(b => b.classList.remove('category-active', 'bg-white/60', 'text-gray-600', 'border-gray-100'));
+                categoryBtns.forEach(b => {
+                    if (b !== btn) {
+                        b.classList.add('bg-white/60', 'text-gray-600', 'border-gray-100');
+                    }
+                });
+                btn.classList.add('category-active');
+            });
+        });
+
+        // 4. 购物车逻辑
+        let cart = [];
+        let total = 0;
+
+        function addToCart(name, price) {
+            const existingItem = cart.find(item => item.name === name);
+            if (existingItem) {
+                existingItem.quantity += 1;
+            } else {
+                cart.push({ name, price, quantity: 1 });
+            }
+            updateCartUI();
+            
+            // 简单的反馈动效
+            const badge = document.getElementById('cart-badge');
+            badge.classList.remove('hidden');
+            badge.classList.add('scale-125');
+            setTimeout(() => badge.classList.remove('scale-125'), 200);
+        }
+
+        function updateQuantity(name, delta) {
+            const item = cart.find(item => item.name === name);
+            if (item) {
+                item.quantity += delta;
+                if (item.quantity <= 0) {
+                    cart = cart.filter(i => i.name !== name);
+                }
+            }
+            updateCartUI();
+        }
+
+        function updateCartUI() {
+            const cartItemsContainer = document.getElementById('cart-items');
+            const cartBadge = document.getElementById('cart-badge');
+            const totalPriceEl = document.getElementById('total-price');
+            const cartTotalEl = document.getElementById('cart-total');
+
+            if (cart.length === 0) {
+                cartItemsContainer.innerHTML = '<div class="flex items-center justify-center py-8 text-gray-400 italic">购物车空空如也，快去挑选吧~</div>';
+                cartBadge.classList.add('hidden');
+            } else {
+                cartItemsContainer.innerHTML = cart.map(item => `
+                    <div class="flex items-center justify-between bg-gray-50 p-3 rounded-2xl">
+                        <div class="flex flex-col">
+                            <span class="font-bold text-gray-800">${item.name}</span>
+                            <span class="text-xs text-orange-500 font-bold">¥${item.price.toFixed(2)}</span>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <button onclick="updateQuantity('${item.name}', -1)" class="w-8 h-8 rounded-full border border-gray-200 flex items-center justify-center text-gray-500 active:bg-gray-100">
+                                <iconify-icon icon="mdi:minus"></iconify-icon>
+                            </button>
+                            <span class="font-bold w-4 text-center">${item.quantity}</span>
+                            <button onclick="updateQuantity('${item.name}', 1)" class="w-8 h-8 rounded-full bg-orange-100 text-[#FF6B35] flex items-center justify-center active:bg-orange-200">
+                                <iconify-icon icon="mdi:plus"></iconify-icon>
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
+                
+                const totalCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+                cartBadge.textContent = totalCount;
+                cartBadge.classList.remove('hidden');
+            }
+
+            total = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+            totalPriceEl.textContent = `¥${total.toFixed(2)}`;
+            cartTotalEl.textContent = `¥${total.toFixed(2)}`;
+        }
+
+        function toggleCart() {
+            const modal = document.getElementById('cart-modal');
+            const overlay = modal.querySelector('.cart-overlay');
+            const isActive = modal.classList.contains('opacity-100');
+
+            if (isActive) {
+                modal.classList.remove('opacity-100', 'pointer-events-auto');
+                modal.classList.add('opacity-0', 'pointer-events-none');
+                overlay.classList.remove('active');
+            } else {
+                modal.classList.remove('opacity-0', 'pointer-events-none');
+                modal.classList.add('opacity-100', 'pointer-events-auto');
+                overlay.classList.add('active');
+            }
+        }
+    </script>
+</body>
+</html>
