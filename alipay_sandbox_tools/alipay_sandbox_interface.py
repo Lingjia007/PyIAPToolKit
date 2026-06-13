@@ -3,9 +3,10 @@ import sys
 import os
 import json
 import uuid
+import struct
 from datetime import datetime
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl, QTimer
+from PyQt6.QtGui import QDesktopServices, QPixmap, QImage
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -13,7 +14,12 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QGroupBox,
     QGridLayout,
+    QLabel,
+    QGraphicsOpacityEffect,
 )
+from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
+
+import serial.tools.list_ports
 
 from qfluentwidgets import (
     FluentIcon as FIF,
@@ -30,6 +36,7 @@ from qfluentwidgets import (
     TextEdit,
     HyperlinkButton,
     ScrollArea,
+    ToolButton,
 )
 
 from settings.config import cfg
@@ -39,6 +46,12 @@ try:
     ALIPAY_AVAILABLE = True
 except ImportError:
     ALIPAY_AVAILABLE = False
+
+try:
+    import qrcode
+    QRCODE_AVAILABLE = True
+except ImportError:
+    QRCODE_AVAILABLE = False
 
 
 class TradeQueryThread(QThread):
@@ -108,6 +121,158 @@ class TradeCloseThread(QThread):
             self.error_occurred.emit(str(e))
 
 
+class PrecreateThread(QThread):
+    """当面付预下单线程，获取二维码链接并生成二维码图片"""
+    result_ready = pyqtSignal(bool, str, str, object)  # success, qr_code, out_trade_no, qimage
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self, alipay_client, out_trade_no, total_amount, subject, timeout="5m"):
+        super().__init__()
+        self.alipay_client = alipay_client
+        self.out_trade_no = out_trade_no
+        self.total_amount = total_amount
+        self.subject = subject
+        self.timeout = timeout
+        self._running = True
+
+    def stop(self):
+        self._running = False
+
+    def run(self):
+        try:
+            if not self._running:
+                return
+            result = self.alipay_client.api_alipay_trade_precreate(
+                out_trade_no=self.out_trade_no,
+                total_amount=self.total_amount,
+                subject=self.subject,
+                timeout_express=self.timeout,
+            )
+            if not self._running:
+                return
+            if result.get("code") == "10000":
+                qr_code = result.get("qr_code", "")
+                # 在线程中生成二维码图片
+                qimage = None
+                if qr_code and QRCODE_AVAILABLE and self._running:
+                    qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_M,
+                                       box_size=8, border=2)
+                    qr.add_data(qr_code)
+                    qr.make(fit=True)
+                    img = qr.make_image(fill_color="black", back_color="white")
+                    if img.mode != "RGB":
+                        img = img.convert("RGB")
+                    buf = img.tobytes("raw", "RGB")
+                    qimage = QImage(buf, img.size[0], img.size[1], 3 * img.size[0], QImage.Format.Format_RGB888).copy()
+                if self._running:
+                    self.result_ready.emit(True, qr_code, self.out_trade_no, qimage)
+            else:
+                if self._running:
+                    self.error_occurred.emit(f"接口返回错误: {result.get('sub_msg', result.get('msg', '未知错误'))}")
+        except Exception as e:
+            if self._running:
+                self.error_occurred.emit(str(e))
+
+
+class PollTradeThread(QThread):
+    """轮询订单支付状态线程"""
+    trade_status = pyqtSignal(str, str)  # status, trade_no
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self, alipay_client, out_trade_no, max_times=60, interval=3):
+        super().__init__()
+        self.alipay_client = alipay_client
+        self.out_trade_no = out_trade_no
+        self.max_times = max_times
+        self.interval = interval
+        self._running = True
+
+    def stop(self):
+        self._running = False
+
+    def run(self):
+        consecutive_errors = 0
+        for i in range(self.max_times):
+            if not self._running:
+                break
+            try:
+                result = self.alipay_client.api_alipay_trade_query(
+                    out_trade_no=self.out_trade_no
+                )
+                consecutive_errors = 0
+                trade_status = result.get("trade_status", "")
+                if trade_status == "TRADE_SUCCESS":
+                    self.trade_status.emit("TRADE_SUCCESS", self.out_trade_no)
+                    return
+                elif trade_status == "TRADE_FINISHED":
+                    self.trade_status.emit("TRADE_FINISHED", self.out_trade_no)
+                    return
+                elif trade_status == "TRADE_CLOSED":
+                    self.trade_status.emit("TRADE_CLOSED", self.out_trade_no)
+                    return
+            except Exception as e:
+                consecutive_errors += 1
+                if consecutive_errors >= 5:
+                    self.error_occurred.emit(f"连续{consecutive_errors}次查询失败: {str(e)}")
+                    return
+                # 单次超时/网络异常，继续重试
+            # 分段sleep，及时响应stop请求
+            for _ in range(self.interval * 10):
+                if not self._running:
+                    return
+                self.msleep(100)
+        self.trade_status.emit("WAIT_TIMEOUT", self.out_trade_no)
+
+
+class SerialReceiveThread(QThread):
+    """串口接收线程，解析开发板发来的请求帧"""
+    request_received = pyqtSignal(int, bytes)  # cmd, data
+
+    def __init__(self, serial_conn):
+        super().__init__()
+        self.serial_conn = serial_conn
+        self._running = True
+
+    def stop(self):
+        self._running = False
+
+    def run(self):
+        rx_buf = bytearray()
+        while self._running:
+            try:
+                if self.serial_conn and self.serial_conn.is_open:
+                    n = self.serial_conn.in_waiting
+                    if n > 0:
+                        rx_buf.extend(self.serial_conn.read(n))
+                    # 尝试解析帧: AA 55 CMD LEN_H LEN_L DATA... 0D 0A
+                    while len(rx_buf) >= 7:  # 最小帧长: 头2+cmd1+len2+尾2
+                        # 查找帧头
+                        if rx_buf[0] != 0xAA or rx_buf[1] != 0x55:
+                            rx_buf.pop(0)
+                            continue
+                        cmd = rx_buf[2]
+                        data_len = (rx_buf[3] << 8) | rx_buf[4]
+                        frame_len = 2 + 1 + 2 + data_len + 2
+                        if len(rx_buf) < frame_len:
+                            break
+                        # 校验帧尾
+                        if rx_buf[frame_len - 2] != 0x0D or rx_buf[frame_len - 1] != 0x0A:
+                            rx_buf.pop(0)
+                            continue
+                        data = bytes(rx_buf[5:5 + data_len])
+                        self.request_received.emit(cmd, data)
+                        rx_buf = rx_buf[frame_len:]
+                    # 缓冲区过长时截断
+                    if len(rx_buf) > 4096:
+                        rx_buf.clear()
+                else:
+                    self.msleep(100)
+                    continue
+            except Exception:
+                self.msleep(50)
+            self.msleep(10)
+
+
 class AlipaySandbox_Widget(QWidget):
     def __init__(self):
         super().__init__()
@@ -133,8 +298,15 @@ class AlipaySandbox_Widget(QWidget):
         self.query_thread = None
         self.refund_thread = None
         self.close_thread = None
+        self.precreate_thread = None
+        self.poll_thread = None
+        self.current_qr_trade_no = None
+        self.current_qr_code = None
+        self.serial_conn = None
+        self.serial_rx_thread = None
 
         self._init_config_ui()
+        self._init_qr_payment_ui()
         self._init_payment_ui()
         self._init_query_ui()
         self._init_refund_ui()
@@ -149,6 +321,9 @@ class AlipaySandbox_Widget(QWidget):
 
         # 预填沙盒默认密钥
         self._set_default_keys()
+
+        # 刷新串口列表
+        self._refresh_serial_ports()
 
         self.__updateTheme()
         cfg.themeChanged.connect(self.__updateTheme)
@@ -227,6 +402,129 @@ class AlipaySandbox_Widget(QWidget):
 
         self.config_group.setLayout(config_layout)
         self.main_vBoxLayout.addWidget(self.config_group)
+
+    def _init_qr_payment_ui(self):
+        self.qr_payment_group = QGroupBox("扫码支付(当面付)")
+        qr_layout = QVBoxLayout()
+        qr_layout.setSpacing(12)
+
+        qr_title = StrongBodyLabel("生成付款二维码")
+        qr_layout.addWidget(qr_title)
+
+        qr_subject_layout = QHBoxLayout()
+        qr_subject_label = BodyLabel("商品名称:")
+        self.qr_subject_lineedit = LineEdit()
+        self.qr_subject_lineedit.setPlaceholderText("商品名称")
+        self.qr_subject_lineedit.setText("LVGL售货机商品")
+        qr_subject_layout.addWidget(qr_subject_label)
+        qr_subject_layout.addWidget(self.qr_subject_lineedit, 1)
+        qr_layout.addLayout(qr_subject_layout)
+
+        qr_amount_layout = QHBoxLayout()
+        qr_amount_label = BodyLabel("支付金额:")
+        self.qr_amount_lineedit = LineEdit()
+        self.qr_amount_lineedit.setPlaceholderText("金额(元)")
+        self.qr_amount_lineedit.setText("0.01")
+        qr_amount_layout.addWidget(qr_amount_label)
+        qr_amount_layout.addWidget(self.qr_amount_lineedit, 1)
+        qr_layout.addLayout(qr_amount_layout)
+
+        qr_trade_layout = QHBoxLayout()
+        qr_trade_label = BodyLabel("订单号:")
+        self.qr_trade_lineedit = LineEdit()
+        self.qr_trade_lineedit.setPlaceholderText("商户订单号(留空自动生成)")
+        qr_trade_layout.addWidget(qr_trade_label)
+        qr_trade_layout.addWidget(self.qr_trade_lineedit, 1)
+        qr_layout.addLayout(qr_trade_layout)
+
+        qr_timeout_layout = QHBoxLayout()
+        qr_timeout_label = BodyLabel("超时时间:")
+        self.qr_timeout_combo = ComboBox()
+        self.qr_timeout_combo.addItems(["1m", "3m", "5m", "10m", "15m", "30m"])
+        self.qr_timeout_combo.setCurrentIndex(2)
+        qr_timeout_layout.addWidget(qr_timeout_label)
+        qr_timeout_layout.addWidget(self.qr_timeout_combo, 1)
+        qr_layout.addLayout(qr_timeout_layout)
+
+        self.create_qr_button = PushButton(FIF.QRCODE, "生成付款二维码", self)
+        self.create_qr_button.clicked.connect(self._create_qr_payment)
+        qr_layout.addWidget(self.create_qr_button)
+
+        # 二维码显示区域
+        qr_display_layout = QHBoxLayout()
+        self.qr_code_label = QLabel()
+        self.qr_code_label.setFixedSize(200, 200)
+        self.qr_code_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.qr_code_label.setStyleSheet("border: 1px dashed #ccc; border-radius: 4px;")
+        self.qr_code_label.setText("二维码将在此显示")
+        qr_display_layout.addStretch(1)
+        qr_display_layout.addWidget(self.qr_code_label)
+        qr_display_layout.addStretch(1)
+        qr_layout.addLayout(qr_display_layout)
+
+        # 支付状态
+        self.qr_status_label = StrongBodyLabel("")
+        self.qr_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        qr_layout.addWidget(self.qr_status_label)
+
+        # 订单号显示
+        self.qr_trade_no_label = BodyLabel("")
+        self.qr_trade_no_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        qr_layout.addWidget(self.qr_trade_no_label)
+
+        qr_btn_layout = QHBoxLayout()
+        self.save_qr_button = PushButton(FIF.SAVE, "保存二维码", self)
+        self.save_qr_button.clicked.connect(self._save_qr_code)
+        self.save_qr_button.setEnabled(False)
+        self.poll_status_button = PushButton(FIF.SYNC, "轮询支付状态", self)
+        self.poll_status_button.clicked.connect(self._start_poll)
+        self.poll_status_button.setEnabled(False)
+        qr_btn_layout.addStretch(1)
+        qr_btn_layout.addWidget(self.save_qr_button)
+        qr_btn_layout.addWidget(self.poll_status_button)
+        qr_btn_layout.addStretch(1)
+        qr_layout.addLayout(qr_btn_layout)
+
+        # 串口传输区域
+        serial_title = StrongBodyLabel("串口传输到开发板")
+        qr_layout.addWidget(serial_title)
+
+        serial_port_layout = QHBoxLayout()
+        serial_port_label = BodyLabel("串口:")
+        self.serial_port_combo = ComboBox()
+        self.serial_port_combo.setPlaceholderText("选择串口")
+        self.refresh_serial_button = PushButton(FIF.SYNC, "刷新", self)
+        self.refresh_serial_button.setFixedWidth(80)
+        self.refresh_serial_button.clicked.connect(self._refresh_serial_ports)
+        serial_port_layout.addWidget(serial_port_label)
+        serial_port_layout.addWidget(self.serial_port_combo, 1)
+        serial_port_layout.addWidget(self.refresh_serial_button)
+        qr_layout.addLayout(serial_port_layout)
+
+        serial_baud_layout = QHBoxLayout()
+        serial_baud_label = BodyLabel("波特率:")
+        self.serial_baud_combo = ComboBox()
+        self.serial_baud_combo.addItems(["9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"])
+        self.serial_baud_combo.setCurrentIndex(4)  # 115200
+        serial_baud_layout.addWidget(serial_baud_label)
+        serial_baud_layout.addWidget(self.serial_baud_combo, 1)
+        qr_layout.addLayout(serial_baud_layout)
+
+        self.serial_connect_button = PushButton(FIF.LINK, "打开串口", self)
+        self.serial_connect_button.clicked.connect(self._toggle_serial)
+        qr_layout.addWidget(self.serial_connect_button)
+
+        self.send_to_device_button = PushButton(FIF.SEND, "发送二维码到设备", self)
+        self.send_to_device_button.clicked.connect(self._send_qr_to_device)
+        self.send_to_device_button.setEnabled(False)
+        qr_layout.addWidget(self.send_to_device_button)
+
+        protocol_hint = BodyLabel("协议: 帧头 0xAA 0x55 | 命令字 | 数据长度(2B) | 数据 | 帧尾 0x0D 0x0A")
+        protocol_hint.setStyleSheet("color: #888; font-size: 11px;")
+        qr_layout.addWidget(protocol_hint)
+
+        self.qr_payment_group.setLayout(qr_layout)
+        self.main_vBoxLayout.addWidget(self.qr_payment_group)
 
     def _init_payment_ui(self):
         self.payment_group = QGroupBox("电脑网站支付")
@@ -374,7 +672,7 @@ class AlipaySandbox_Widget(QWidget):
             value.setText(value_text)
             value.setReadOnly(True)
             copy_btn = PushButton(FIF.COPY, "复制", self)
-            copy_btn.setFixedWidth(60)
+            copy_btn.setFixedWidth(120)
             copy_btn.clicked.connect(lambda checked, v=value: self._copy_text(v.text()))
             row.addWidget(label)
             row.addWidget(value, 1)
@@ -399,7 +697,7 @@ class AlipaySandbox_Widget(QWidget):
             value.setText(value_text)
             value.setReadOnly(True)
             copy_btn = PushButton(FIF.COPY, "复制", self)
-            copy_btn.setFixedWidth(60)
+            copy_btn.setFixedWidth(120)
             copy_btn.clicked.connect(lambda checked, v=value: self._copy_text(v.text()))
             row.addWidget(label)
             row.addWidget(value, 1)
@@ -412,14 +710,18 @@ class AlipaySandbox_Widget(QWidget):
     def _init_output_bar_ui(self):
         self.right_vBoxLayout = QVBoxLayout()
         self.right_vBoxLayout.setSpacing(0)
-        self.right_vBoxLayout.setContentsMargins(0, 0, 0, 0)
+        self.right_vBoxLayout.setContentsMargins(0, 10, 10, 10)
+
+        self.toggle_log_btn = ToolButton(FIF.RIGHT_ARROW, self)
+        self.toggle_log_btn.setFixedSize(24, 24)
+        self.toggle_log_btn.clicked.connect(self._toggle_log_panel)
 
         self.output_bar_widget = QWidget()
         self.output_bar_vBoxLayout = QVBoxLayout(self.output_bar_widget)
-        self.output_bar_vBoxLayout.setContentsMargins(5, 0, 0, 0)
+        self.output_bar_vBoxLayout.setContentsMargins(5, 0, 5, 0)
 
         header_layout = QHBoxLayout()
-        header_label = BodyLabel("输出日志")
+        header_label = BodyLabel("日志输出")
         header_layout.addWidget(header_label)
         header_layout.addStretch(1)
 
@@ -437,8 +739,42 @@ class AlipaySandbox_Widget(QWidget):
         self.output_area_text.setReadOnly(True)
         self.output_bar_vBoxLayout.addWidget(self.output_area_text)
 
+        self.right_vBoxLayout.addWidget(self.toggle_log_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         self.right_vBoxLayout.addWidget(self.output_bar_widget, 1)
-        self.Main_hLayout.addLayout(self.right_vBoxLayout, 1)
+        self.Main_hLayout.addLayout(self.right_vBoxLayout, 0)
+
+        self.log_visible = True
+        self.target_log_width = 350
+        self.output_bar_widget.setFixedWidth(self.target_log_width)
+
+        self.opacity_effect = QGraphicsOpacityEffect(self.output_bar_widget)
+        self.output_bar_widget.setGraphicsEffect(self.opacity_effect)
+        self.opacity_effect.setOpacity(1.0)
+
+        self.opacity_animation = None
+
+    def _toggle_log_panel(self):
+        self.log_visible = not self.log_visible
+
+        if self.opacity_animation:
+            self.opacity_animation.stop()
+
+        self.opacity_animation = QPropertyAnimation(self.opacity_effect, b"opacity")
+        self.opacity_animation.setDuration(150)
+        self.opacity_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
+
+        if self.log_visible:
+            self.toggle_log_btn.setIcon(FIF.RIGHT_ARROW)
+            self.output_bar_widget.setFixedWidth(self.target_log_width)
+            self.opacity_animation.setStartValue(0.0)
+            self.opacity_animation.setEndValue(1.0)
+        else:
+            self.toggle_log_btn.setIcon(FIF.LEFT_ARROW)
+            self.opacity_animation.setStartValue(1.0)
+            self.opacity_animation.setEndValue(0.0)
+            self.opacity_animation.finished.connect(lambda: self.output_bar_widget.setFixedWidth(0))
+
+        self.opacity_animation.start()
 
     def __updateTheme(self):
         is_dark = isDarkTheme()
@@ -447,6 +783,7 @@ class AlipaySandbox_Widget(QWidget):
 
         widgets_to_update = [
             getattr(self, 'config_group', None),
+            getattr(self, 'qr_payment_group', None),
             getattr(self, 'payment_group', None),
             getattr(self, 'query_group', None),
             getattr(self, 'refund_group', None),
@@ -511,6 +848,190 @@ class AlipaySandbox_Widget(QWidget):
                     duration=3000,
                     parent=self,
                 )
+
+    def _refresh_serial_ports(self):
+        self.serial_port_combo.clear()
+        ports = serial.tools.list_ports.comports()
+        for port in ports:
+            self.serial_port_combo.addItem(f"{port.device} - {port.description}")
+        if ports:
+            self.serial_port_combo.setCurrentIndex(0)
+
+    def _get_selected_port_name(self):
+        text = self.serial_port_combo.currentText()
+        if not text:
+            return None
+        return text.split(" - ")[0].strip()
+
+    def _toggle_serial(self):
+        if self.serial_conn and self.serial_conn.is_open:
+            # 停止接收线程
+            if self.serial_rx_thread and self.serial_rx_thread.isRunning():
+                self.serial_rx_thread.stop()
+                self.serial_rx_thread.wait(2000)
+            self.serial_conn.close()
+            self.serial_conn = None
+            self.serial_connect_button.setText("打开串口")
+            self.serial_connect_button.setIcon(FIF.LINK)
+            self.send_to_device_button.setEnabled(False)
+            self._log("串口已关闭")
+            InfoBar.info(title="串口已关闭", content="",
+                orient=Qt.Orientation.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP, duration=2000, parent=self)
+        else:
+            port_name = self._get_selected_port_name()
+            if not port_name:
+                InfoBar.warning(title="警告", content="请选择串口",
+                    orient=Qt.Orientation.Horizontal, isClosable=True,
+                    position=InfoBarPosition.TOP, duration=3000, parent=self)
+                return
+            baud = int(self.serial_baud_combo.currentText())
+            try:
+                import serial as pyserial
+                self.serial_conn = pyserial.Serial(port_name, baud, timeout=1)
+                self.serial_connect_button.setText("关闭串口")
+                self.serial_connect_button.setIcon(FIF.CANCEL)
+                self.send_to_device_button.setEnabled(True)
+                self._log(f"串口已打开: {port_name} @ {baud}")
+                InfoBar.success(title="串口已打开", content=f"{port_name} @ {baud}",
+                    orient=Qt.Orientation.Horizontal, isClosable=True,
+                    position=InfoBarPosition.TOP, duration=3000, parent=self)
+                # 启动接收线程
+                self.serial_rx_thread = SerialReceiveThread(self.serial_conn)
+                self.serial_rx_thread.request_received.connect(self._on_serial_request)
+                self.serial_rx_thread.start()
+            except Exception as e:
+                self._log(f"串口打开失败: {str(e)}")
+                InfoBar.error(title="打开失败", content=str(e),
+                    orient=Qt.Orientation.Horizontal, isClosable=True,
+                    position=InfoBarPosition.TOP, duration=3000, parent=self)
+
+    def _build_frame(self, cmd, data):
+        """
+        构建通信帧:
+        帧头: 0xAA 0x55
+        命令字: 1字节
+        数据长度: 2字节(大端)
+        数据: 变长
+        帧尾: 0x0D 0x0A
+        """
+        header = bytes([0xAA, 0x55])
+        tail = bytes([0x0D, 0x0A])
+        length = struct.pack('>H', len(data))
+        return header + bytes([cmd]) + length + data + tail
+
+    def _send_qr_to_device(self):
+        if not self.serial_conn or not self.serial_conn.is_open:
+            InfoBar.warning(title="警告", content="请先打开串口",
+                orient=Qt.Orientation.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP, duration=3000, parent=self)
+            return
+
+        if not self.current_qr_code:
+            InfoBar.warning(title="警告", content="请先生成二维码",
+                orient=Qt.Orientation.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP, duration=3000, parent=self)
+            return
+
+        try:
+            # 命令字 0x01: 发送二维码URL
+            qr_data = self.current_qr_code.encode('utf-8')
+            frame = self._build_frame(0x01, qr_data)
+            self.serial_conn.write(frame)
+            self._log(f"已发送二维码到设备, 数据长度: {len(qr_data)} 字节")
+            self._log(f"帧数据(hex): {frame[:20].hex()}...")
+            InfoBar.success(title="发送成功", content=f"二维码已发送到设备 ({len(qr_data)}B)",
+                orient=Qt.Orientation.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP, duration=3000, parent=self)
+        except Exception as e:
+            self._log(f"发送失败: {str(e)}")
+            InfoBar.error(title="发送失败", content=str(e),
+                orient=Qt.Orientation.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP, duration=3000, parent=self)
+
+    def _send_payment_status_to_device(self, status):
+        """发送支付状态到设备, 命令字 0x02"""
+        if not self.serial_conn or not self.serial_conn.is_open:
+            return
+        try:
+            status_map = {
+                "TRADE_SUCCESS": 0x01,
+                "TRADE_FINISHED": 0x02,
+                "TRADE_CLOSED": 0x03,
+                "WAIT_TIMEOUT": 0x04,
+            }
+            status_byte = status_map.get(status, 0x00)
+            frame = self._build_frame(0x02, bytes([status_byte]))
+            self.serial_conn.write(frame)
+            self._log(f"已发送支付状态到设备: {status} (0x{status_byte:02X})")
+        except Exception as e:
+            self._log(f"发送状态失败: {str(e)}")
+
+    def _on_serial_request(self, cmd, data):
+        """处理开发板发来的请求帧"""
+        cmd_names = {
+            0x81: "请求生成二维码",
+            0x82: "请求查询支付状态",
+            0x83: "请求关闭订单",
+            0x84: "心跳",
+        }
+        cmd_name = cmd_names.get(cmd, "未知命令")
+        # 完整帧hex
+        full_frame = self._build_frame(cmd, data)
+        hex_str = ' '.join(f'{b:02X}' for b in full_frame)
+        self._log(f"[RX] {cmd_name} (CMD=0x{cmd:02X})")
+        self._log(f"  原始帧: {hex_str}")
+        if data:
+            try:
+                text = data.decode('utf-8')
+                self._log(f"  数据(文本): {text}")
+            except UnicodeDecodeError:
+                pass
+            self._log(f"  数据(hex): {data.hex()}")
+
+        if cmd == 0x81:
+            # 设备请求生成二维码: data = 商品名称(UTF-8) + 0x00 + 金额(ASCII)
+            try:
+                null_idx = data.index(0x00)
+                name_bytes = data[:null_idx]
+                amount_bytes = data[null_idx + 1:]
+                subject = name_bytes.decode('utf-8')
+                amount = amount_bytes.decode('ascii')
+                self._log(f"  解析: 商品={subject}, 金额={amount}")
+                # 自动填入并生成
+                self.qr_subject_lineedit.setText(subject)
+                self.qr_amount_lineedit.setText(amount)
+                self.qr_trade_lineedit.clear()
+                self._create_qr_payment()
+            except (ValueError, UnicodeDecodeError) as e:
+                self._log(f"  解析失败: {str(e)}")
+
+        elif cmd == 0x82:
+            # 设备请求查询支付状态
+            if self.current_qr_trade_no:
+                self._log(f"  当前订单: {self.current_qr_trade_no}")
+                self._start_poll()
+            else:
+                self._log("  无当前订单可查询")
+
+        elif cmd == 0x83:
+            # 设备请求关闭订单
+            if self.current_qr_trade_no:
+                self._log(f"  关闭订单: {self.current_qr_trade_no}")
+                self._close_trade()
+            else:
+                self._log("  无当前订单可关闭")
+
+        elif cmd == 0x84:
+            # 设备心跳/连接确认
+            # 回复心跳
+            if self.serial_conn and self.serial_conn.is_open:
+                frame = self._build_frame(0x04, bytes([0x01]))
+                self.serial_conn.write(frame)
+                self._log(f"  已回复心跳")
+
+        else:
+            self._log(f"  未知请求: CMD=0x{cmd:02X}")
 
     def _set_default_keys(self):
         """预填沙盒默认密钥"""
@@ -593,6 +1114,23 @@ class AlipaySandbox_Widget(QWidget):
                     parent=self,
                 )
 
+    def _warmup_client(self):
+        """预热SDK：提前建立SSL连接和DNS缓存，避免首次请求慢"""
+        import threading
+        def _do_warmup():
+            try:
+                import urllib3
+                gateway = self.gateway_lineedit.text().strip()
+                # 预建连接池
+                http = urllib3.PoolManager(timeout=urllib3.Timeout(connect=5, read=5))
+                http.request("GET", gateway, retries=False)
+                http.clear()
+                self._log("SDK预热完成")
+            except Exception:
+                self._log("SDK预热跳过（不影响使用）")
+        t = threading.Thread(target=_do_warmup, daemon=True)
+        t.start()
+
     def _init_client(self):
         if not ALIPAY_AVAILABLE:
             InfoBar.error(
@@ -661,6 +1199,9 @@ class AlipaySandbox_Widget(QWidget):
             self._log(f"签名方式: {sign_type}")
             self._log(f"网关: {gateway}")
 
+            # 预热SDK：提前建立SSL连接，避免首次请求慢
+            self._warmup_client()
+
             InfoBar.success(
                 title="初始化成功",
                 content="支付宝沙盒客户端已初始化",
@@ -681,6 +1222,202 @@ class AlipaySandbox_Widget(QWidget):
                 duration=3000,
                 parent=self,
             )
+
+    def _create_qr_payment(self):
+        if not self.alipay_client:
+            InfoBar.warning(
+                title="警告",
+                content="请先初始化客户端",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
+            return
+
+        if not QRCODE_AVAILABLE:
+            InfoBar.error(
+                title="错误",
+                content="qrcode库未安装，请使用 'pip install qrcode[pil]' 安装",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
+            return
+
+        # 停止之前的轮询线程（不阻塞等待，让旧线程自行退出）
+        if self.poll_thread and self.poll_thread.isRunning():
+            self.poll_thread.stop()
+
+        # 停止之前的预创建线程（不阻塞等待）
+        if self.precreate_thread and self.precreate_thread.isRunning():
+            self.precreate_thread.stop()
+
+        # 清除之前的状态
+        self.current_qr_code = None
+        self.current_qr_trade_no = None
+        self.qr_code_label.clear()
+        self.qr_status_label.setText("正在生成二维码...")
+        self.qr_status_label.setStyleSheet("")
+        self.qr_trade_no_label.setText("")
+        self.save_qr_button.setEnabled(False)
+        self.poll_status_button.setEnabled(False)
+
+        subject = self.qr_subject_lineedit.text().strip()
+        amount = self.qr_amount_lineedit.text().strip()
+        out_trade_no = self.qr_trade_lineedit.text().strip()
+        timeout = self.qr_timeout_combo.currentText()
+
+        if not subject:
+            InfoBar.warning(title="警告", content="请输入商品名称",
+                orient=Qt.Orientation.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP, duration=3000, parent=self)
+            return
+
+        if not amount:
+            InfoBar.warning(title="警告", content="请输入支付金额",
+                orient=Qt.Orientation.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP, duration=3000, parent=self)
+            return
+
+        if not out_trade_no:
+            out_trade_no = datetime.now().strftime("%Y%m%d%H%M%S") + str(uuid.uuid4().int)[:6]
+
+        self.create_qr_button.setEnabled(False)
+        self.qr_status_label.setText("正在生成二维码...")
+        self.qr_trade_no_label.setText(f"订单号: {out_trade_no}")
+        self._log(f"创建扫码支付订单: {out_trade_no}, 金额: {amount}, 商品: {subject}")
+
+        self.current_qr_trade_no = out_trade_no
+        self.precreate_thread = PrecreateThread(
+            self.alipay_client, out_trade_no, amount, subject, timeout
+        )
+        self.precreate_thread.result_ready.connect(self._on_precreate_result)
+        self.precreate_thread.error_occurred.connect(self._on_precreate_error)
+        self.precreate_thread.start()
+
+    def _on_precreate_result(self, success, qr_code, out_trade_no, qimage):
+        # 忽略旧线程的回调
+        if out_trade_no != self.current_qr_trade_no:
+            return
+        self.create_qr_button.setEnabled(True)
+        if success and qr_code:
+            self.current_qr_code = qr_code
+            self._log(f"二维码链接获取成功: {qr_code}")
+            # 使用线程中生成的二维码图片
+            if qimage:
+                pixmap = QPixmap.fromImage(qimage)
+                self.qr_code_label.setPixmap(pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio,
+                                                             Qt.TransformationMode.SmoothTransformation))
+            self.qr_status_label.setText("等待扫码支付...")
+            self.qr_trade_no_label.setText(f"订单号: {out_trade_no}")
+            self.save_qr_button.setEnabled(True)
+            self.poll_status_button.setEnabled(True)
+
+            InfoBar.success(title="二维码已生成", content="请使用支付宝扫码支付",
+                orient=Qt.Orientation.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP, duration=3000, parent=self)
+
+            # 自动发送订单号到设备 (CMD 0x03)
+            if self.serial_conn and self.serial_conn.is_open and out_trade_no:
+                trade_data = out_trade_no.encode('utf-8')
+                frame = self._build_frame(0x03, trade_data)
+                self.serial_conn.write(frame)
+                self._log(f"已发送订单号到设备: {out_trade_no}")
+
+            # 自动发送二维码到串口
+            self._send_qr_to_device()
+
+            # 自动开始轮询
+            self._start_poll()
+        else:
+            self.qr_status_label.setText("二维码生成失败")
+            InfoBar.error(title="失败", content="未获取到二维码链接",
+                orient=Qt.Orientation.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP, duration=3000, parent=self)
+
+    def _on_precreate_error(self, error):
+        # 忽略旧线程的回调（precreate_thread已变更说明是新请求）
+        if self.precreate_thread and self.sender() != self.precreate_thread:
+            return
+        self.create_qr_button.setEnabled(True)
+        self.qr_status_label.setText("生成失败")
+        self._log(f"扫码支付创建失败: {error}")
+        InfoBar.error(title="创建失败", content=error,
+            orient=Qt.Orientation.Horizontal, isClosable=True,
+            position=InfoBarPosition.TOP, duration=3000, parent=self)
+
+    def _start_poll(self):
+        if not self.alipay_client or not self.current_qr_trade_no:
+            return
+        # 停止之前的轮询（不阻塞等待）
+        if self.poll_thread and self.poll_thread.isRunning():
+            self.poll_thread.stop()
+
+        self.poll_status_button.setEnabled(False)
+        self.qr_status_label.setText("轮询支付状态中...")
+        self._log(f"开始轮询订单: {self.current_qr_trade_no}")
+
+        self.poll_thread = PollTradeThread(
+            self.alipay_client, self.current_qr_trade_no, max_times=100, interval=3
+        )
+        self.poll_thread.trade_status.connect(self._on_poll_status)
+        self.poll_thread.error_occurred.connect(self._on_poll_error)
+        self.poll_thread.start()
+
+    def _on_poll_status(self, status, trade_no):
+        # 忽略旧轮询线程的回调
+        if trade_no != self.current_qr_trade_no:
+            return
+        self.poll_status_button.setEnabled(True)
+        # 自动发送支付状态到设备
+        self._send_payment_status_to_device(status)
+        if status == "TRADE_SUCCESS":
+            self.qr_status_label.setText("支付成功!")
+            self.qr_status_label.setStyleSheet("color: #10b981; font-size: 16px;")
+            self._log(f"订单 {trade_no} 支付成功!")
+            InfoBar.success(title="支付成功", content=f"订单 {trade_no} 已完成支付",
+                orient=Qt.Orientation.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP, duration=5000, parent=self)
+        elif status == "TRADE_FINISHED":
+            self.qr_status_label.setText("交易已完成")
+            self.qr_status_label.setStyleSheet("color: #10b981; font-size: 16px;")
+            self._log(f"订单 {trade_no} 交易已完成")
+        elif status == "TRADE_CLOSED":
+            self.qr_status_label.setText("交易已关闭")
+            self.qr_status_label.setStyleSheet("color: #ef4444; font-size: 16px;")
+            self._log(f"订单 {trade_no} 交易已关闭")
+        elif status == "WAIT_TIMEOUT":
+            self.qr_status_label.setText("等待超时，请重新生成")
+            self.qr_status_label.setStyleSheet("color: #f59e0b; font-size: 16px;")
+            self._log(f"订单 {trade_no} 轮询超时")
+
+    def _on_poll_error(self, error):
+        self.poll_status_button.setEnabled(True)
+        self.qr_status_label.setText("查询失败，请重试")
+        self.qr_status_label.setStyleSheet("color: #ef4444; font-size: 16px;")
+        self._log(f"轮询异常终止: {error}")
+
+    def _save_qr_code(self):
+        pixmap = self.qr_code_label.pixmap()
+        if not pixmap:
+            return
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "保存二维码", "qrcode_payment.png", "PNG图片 (*.png);;所有文件 (*)"
+        )
+        if file_path:
+            if pixmap.save(file_path):
+                self._log(f"二维码已保存: {file_path}")
+                InfoBar.success(title="保存成功", content=f"二维码已保存到 {file_path}",
+                    orient=Qt.Orientation.Horizontal, isClosable=True,
+                    position=InfoBarPosition.TOP, duration=3000, parent=self)
+            else:
+                InfoBar.error(title="保存失败", content="无法保存图片",
+                    orient=Qt.Orientation.Horizontal, isClosable=True,
+                    position=InfoBarPosition.TOP, duration=3000, parent=self)
 
     def _create_payment(self):
         if not self.alipay_client:

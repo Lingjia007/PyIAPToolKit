@@ -4,7 +4,7 @@ import os
 import struct
 import base64
 from datetime import datetime
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QWidget,
@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QSpacerItem,
     QSizePolicy,
+    QGraphicsOpacityEffect,
 )
 
 from qfluentwidgets import (
@@ -33,6 +34,7 @@ from qfluentwidgets import (
     CheckBox,
     CardWidget,
     ScrollArea,
+    ToolButton,
 )
 
 from settings.config import cfg
@@ -1170,14 +1172,18 @@ class FirmwareHeader_Widget(QWidget):
     def _init_output_bar_ui(self):
         self.right_vBoxLayout = QVBoxLayout()
         self.right_vBoxLayout.setSpacing(0)
-        self.right_vBoxLayout.setContentsMargins(10, 30, 30, 30)
+        self.right_vBoxLayout.setContentsMargins(0, 10, 10, 10)
+
+        self.toggle_log_btn = ToolButton(FIF.RIGHT_ARROW, self)
+        self.toggle_log_btn.setFixedSize(24, 24)
+        self.toggle_log_btn.clicked.connect(self._toggle_log_panel)
 
         self.output_bar_widget = QWidget()
         self.output_bar_vBoxLayout = QVBoxLayout(self.output_bar_widget)
-        self.output_bar_vBoxLayout.setContentsMargins(0, 0, 0, 0)
+        self.output_bar_vBoxLayout.setContentsMargins(5, 0, 5, 0)
 
         header_layout = QHBoxLayout()
-        header_label = BodyLabel("输出日志")
+        header_label = BodyLabel("日志输出")
         header_layout.addWidget(header_label)
         header_layout.addStretch(1)
 
@@ -1195,8 +1201,42 @@ class FirmwareHeader_Widget(QWidget):
         self.output_area_text.setReadOnly(True)
         self.output_bar_vBoxLayout.addWidget(self.output_area_text)
 
+        self.right_vBoxLayout.addWidget(self.toggle_log_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         self.right_vBoxLayout.addWidget(self.output_bar_widget, 1)
-        self.Main_hLayout.addLayout(self.right_vBoxLayout, 1)
+        self.Main_hLayout.addLayout(self.right_vBoxLayout, 0)
+
+        self.log_visible = True
+        self.target_log_width = 350
+        self.output_bar_widget.setFixedWidth(self.target_log_width)
+
+        self.opacity_effect = QGraphicsOpacityEffect(self.output_bar_widget)
+        self.output_bar_widget.setGraphicsEffect(self.opacity_effect)
+        self.opacity_effect.setOpacity(1.0)
+
+        self.opacity_animation = None
+
+    def _toggle_log_panel(self):
+        self.log_visible = not self.log_visible
+
+        if self.opacity_animation:
+            self.opacity_animation.stop()
+
+        self.opacity_animation = QPropertyAnimation(self.opacity_effect, b"opacity")
+        self.opacity_animation.setDuration(150)
+        self.opacity_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
+
+        if self.log_visible:
+            self.toggle_log_btn.setIcon(FIF.RIGHT_ARROW)
+            self.output_bar_widget.setFixedWidth(self.target_log_width)
+            self.opacity_animation.setStartValue(0.0)
+            self.opacity_animation.setEndValue(1.0)
+        else:
+            self.toggle_log_btn.setIcon(FIF.LEFT_ARROW)
+            self.opacity_animation.setStartValue(1.0)
+            self.opacity_animation.setEndValue(0.0)
+            self.opacity_animation.finished.connect(lambda: self.output_bar_widget.setFixedWidth(0))
+
+        self.opacity_animation.start()
 
     def __updateTheme(self):
         is_dark = isDarkTheme()

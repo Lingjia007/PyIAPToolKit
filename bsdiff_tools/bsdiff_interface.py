@@ -273,7 +273,7 @@ class BSDiff_Tools_Widget(QWidget):
         
         self.output_bar_widget = QWidget()
         self.output_bar_vBoxLayout = QVBoxLayout(self.output_bar_widget)
-        self.output_bar_vBoxLayout.setContentsMargins(5, 0, 0, 0)
+        self.output_bar_vBoxLayout.setContentsMargins(5, 0, 5, 0)
 
         header_layout = QHBoxLayout()
         header_label = BodyLabel("日志输出")

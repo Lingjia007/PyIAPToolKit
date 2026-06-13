@@ -110,7 +110,7 @@ class Window(FluentWindow):
             QDesktopServices.openUrl(QUrl("https://github.com/Lingjia007"))
 
     def initWindow(self):
-        self.resize(1055, 745)
+        self.resize(1105, 735)
         self.setWindowIcon(QIcon('settings/resource/images/logo.png'))
         self.setWindowTitle('PyIAPToolKit')
 
