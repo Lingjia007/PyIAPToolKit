@@ -121,6 +121,35 @@ class TradeCloseThread(QThread):
             self.error_occurred.emit(str(e))
 
 
+class TradePayThread(QThread):
+    """条码支付(被扫)线程，商户扫用户付款码"""
+    result_ready = pyqtSignal(bool, str)
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self, alipay_client, auth_code, total_amount, subject, out_trade_no=None):
+        super().__init__()
+        self.alipay_client = alipay_client
+        self.auth_code = auth_code
+        self.total_amount = total_amount
+        self.subject = subject
+        self.out_trade_no = out_trade_no
+
+    def run(self):
+        try:
+            kwargs = {
+                'auth_code': self.auth_code,
+                'scene': 'bar_code',
+                'total_amount': self.total_amount,
+                'subject': self.subject,
+            }
+            if self.out_trade_no:
+                kwargs['out_trade_no'] = self.out_trade_no
+            response = self.alipay_client.api_alipay_trade_pay(**kwargs)
+            self.result_ready.emit(True, json.dumps(response, ensure_ascii=False, indent=2))
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
+
 class PrecreateThread(QThread):
     """当面付预下单线程，获取二维码链接并生成二维码图片"""
     result_ready = pyqtSignal(bool, str, str, object)  # success, qr_code, out_trade_no, qimage
@@ -300,6 +329,7 @@ class AlipaySandbox_Widget(QWidget):
         self.close_thread = None
         self.precreate_thread = None
         self.poll_thread = None
+        self.trade_pay_thread = None
         self.current_qr_trade_no = None
         self.current_qr_code = None
         self.serial_conn = None
@@ -307,6 +337,7 @@ class AlipaySandbox_Widget(QWidget):
 
         self._init_config_ui()
         self._init_qr_payment_ui()
+        self._init_barcode_payment_ui()
         self._init_payment_ui()
         self._init_query_ui()
         self._init_refund_ui()
@@ -525,6 +556,65 @@ class AlipaySandbox_Widget(QWidget):
 
         self.qr_payment_group.setLayout(qr_layout)
         self.main_vBoxLayout.addWidget(self.qr_payment_group)
+
+    def _init_barcode_payment_ui(self):
+        self.barcode_payment_group = QGroupBox("条码支付(被扫)")
+        barcode_layout = QVBoxLayout()
+        barcode_layout.setSpacing(12)
+
+        barcode_title = StrongBodyLabel("商户扫用户付款码")
+        barcode_layout.addWidget(barcode_title)
+
+        auth_code_layout = QHBoxLayout()
+        auth_code_label = BodyLabel("付款码:")
+        self.auth_code_lineedit = LineEdit()
+        self.auth_code_lineedit.setPlaceholderText("用户支付宝付款码数字(18~28位)")
+        auth_code_layout.addWidget(auth_code_label)
+        auth_code_layout.addWidget(self.auth_code_lineedit, 1)
+        barcode_layout.addLayout(auth_code_layout)
+
+        barcode_subject_layout = QHBoxLayout()
+        barcode_subject_label = BodyLabel("商品名称:")
+        self.barcode_subject_lineedit = LineEdit()
+        self.barcode_subject_lineedit.setPlaceholderText("商品名称")
+        self.barcode_subject_lineedit.setText("LVGL售货机商品")
+        barcode_subject_layout.addWidget(barcode_subject_label)
+        barcode_subject_layout.addWidget(self.barcode_subject_lineedit, 1)
+        barcode_layout.addLayout(barcode_subject_layout)
+
+        barcode_amount_layout = QHBoxLayout()
+        barcode_amount_label = BodyLabel("支付金额:")
+        self.barcode_amount_lineedit = LineEdit()
+        self.barcode_amount_lineedit.setPlaceholderText("金额(元)")
+        self.barcode_amount_lineedit.setText("0.01")
+        barcode_amount_layout.addWidget(barcode_amount_label)
+        barcode_amount_layout.addWidget(self.barcode_amount_lineedit, 1)
+        barcode_layout.addLayout(barcode_amount_layout)
+
+        barcode_trade_layout = QHBoxLayout()
+        barcode_trade_label = BodyLabel("订单号:")
+        self.barcode_trade_lineedit = LineEdit()
+        self.barcode_trade_lineedit.setPlaceholderText("商户订单号(留空自动生成)")
+        barcode_trade_layout.addWidget(barcode_trade_label)
+        barcode_trade_layout.addWidget(self.barcode_trade_lineedit, 1)
+        barcode_layout.addLayout(barcode_trade_layout)
+
+        self.barcode_pay_button = PushButton(FIF.SHOPPING_CART, "发起条码支付", self)
+        self.barcode_pay_button.clicked.connect(self._barcode_pay)
+        barcode_layout.addWidget(self.barcode_pay_button)
+
+        # 条码支付状态
+        self.barcode_status_label = StrongBodyLabel("")
+        self.barcode_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        barcode_layout.addWidget(self.barcode_status_label)
+
+        barcode_hint = BodyLabel("设备扫描用户付款码后，通过串口发送付款码数字(CMD=0x85)即可自动发起支付")
+        barcode_hint.setStyleSheet("color: #888; font-size: 11px;")
+        barcode_hint.setWordWrap(True)
+        barcode_layout.addWidget(barcode_hint)
+
+        self.barcode_payment_group.setLayout(barcode_layout)
+        self.main_vBoxLayout.addWidget(self.barcode_payment_group)
 
     def _init_payment_ui(self):
         self.payment_group = QGroupBox("电脑网站支付")
@@ -784,6 +874,7 @@ class AlipaySandbox_Widget(QWidget):
         widgets_to_update = [
             getattr(self, 'config_group', None),
             getattr(self, 'qr_payment_group', None),
+            getattr(self, 'barcode_payment_group', None),
             getattr(self, 'payment_group', None),
             getattr(self, 'query_group', None),
             getattr(self, 'refund_group', None),
@@ -967,6 +1058,98 @@ class AlipaySandbox_Widget(QWidget):
         except Exception as e:
             self._log(f"发送状态失败: {str(e)}")
 
+    def _barcode_pay(self):
+        """条码支付(被扫): 商户扫用户付款码"""
+        if not self.alipay_client:
+            InfoBar.warning(title="警告", content="请先初始化客户端",
+                orient=Qt.Orientation.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP, duration=3000, parent=self)
+            return
+
+        # 停止上一次条码支付线程
+        if self.trade_pay_thread and self.trade_pay_thread.isRunning():
+            self.trade_pay_thread.quit()
+            self.trade_pay_thread.wait(1000)
+
+        auth_code = self.auth_code_lineedit.text().strip()
+        subject = self.barcode_subject_lineedit.text().strip()
+        amount = self.barcode_amount_lineedit.text().strip()
+        out_trade_no = self.barcode_trade_lineedit.text().strip()
+
+        if not auth_code:
+            InfoBar.warning(title="警告", content="请输入付款码",
+                orient=Qt.Orientation.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP, duration=3000, parent=self)
+            return
+
+        if not subject:
+            InfoBar.warning(title="警告", content="请输入商品名称",
+                orient=Qt.Orientation.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP, duration=3000, parent=self)
+            return
+
+        if not amount:
+            InfoBar.warning(title="警告", content="请输入支付金额",
+                orient=Qt.Orientation.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP, duration=3000, parent=self)
+            return
+
+        if not out_trade_no:
+            out_trade_no = datetime.now().strftime("%Y%m%d%H%M%S") + str(uuid.uuid4().int)[:6]
+
+        self.barcode_pay_button.setEnabled(False)
+        self.barcode_status_label.setText("正在发起条码支付...")
+        self.barcode_status_label.setStyleSheet("")
+        self._log(f"条码支付: 付款码={auth_code}, 金额={amount}, 商品={subject}, 订单号={out_trade_no}")
+
+        self.trade_pay_thread = TradePayThread(
+            self.alipay_client, auth_code, amount, subject, out_trade_no
+        )
+        self.trade_pay_thread.result_ready.connect(self._on_barcode_pay_result)
+        self.trade_pay_thread.error_occurred.connect(self._on_barcode_pay_error)
+        self.trade_pay_thread.start()
+
+    def _on_barcode_pay_result(self, success, result):
+        self.barcode_pay_button.setEnabled(True)
+        self._log(f"条码支付结果:\n{result}")
+        try:
+            result_dict = json.loads(result)
+            code = result_dict.get("code", "")
+            trade_no = result_dict.get("trade_no", "")
+            if code == "10000":
+                self.barcode_status_label.setText("支付成功!")
+                self.barcode_status_label.setStyleSheet("color: #10b981; font-size: 16px;")
+                self._log(f"条码支付成功! 支付宝交易号: {trade_no}")
+                InfoBar.success(title="支付成功", content=f"交易号: {trade_no}",
+                    orient=Qt.Orientation.Horizontal, isClosable=True,
+                    position=InfoBarPosition.TOP, duration=5000, parent=self)
+                # 通知设备支付成功
+                self._send_payment_status_to_device("TRADE_SUCCESS")
+            elif code == "10003":
+                self.barcode_status_label.setText("支付处理中...")
+                self.barcode_status_label.setStyleSheet("color: #f59e0b; font-size: 16px;")
+                self._log("条码支付处理中，需要用户确认")
+            else:
+                sub_msg = result_dict.get("sub_msg", result_dict.get("msg", "未知错误"))
+                self.barcode_status_label.setText(f"支付失败: {sub_msg}")
+                self.barcode_status_label.setStyleSheet("color: #ef4444; font-size: 16px;")
+                self._log(f"条码支付失败: {sub_msg}")
+                InfoBar.error(title="支付失败", content=sub_msg,
+                    orient=Qt.Orientation.Horizontal, isClosable=True,
+                    position=InfoBarPosition.TOP, duration=5000, parent=self)
+        except json.JSONDecodeError:
+            self.barcode_status_label.setText("支付结果解析失败")
+            self.barcode_status_label.setStyleSheet("color: #ef4444; font-size: 16px;")
+
+    def _on_barcode_pay_error(self, error):
+        self.barcode_pay_button.setEnabled(True)
+        self.barcode_status_label.setText("支付请求失败")
+        self.barcode_status_label.setStyleSheet("color: #ef4444; font-size: 16px;")
+        self._log(f"条码支付异常: {error}")
+        InfoBar.error(title="请求失败", content=error,
+            orient=Qt.Orientation.Horizontal, isClosable=True,
+            position=InfoBarPosition.TOP, duration=5000, parent=self)
+
     def _on_serial_request(self, cmd, data):
         """处理开发板发来的请求帧"""
         cmd_names = {
@@ -974,6 +1157,7 @@ class AlipaySandbox_Widget(QWidget):
             0x82: "请求查询支付状态",
             0x83: "请求关闭订单",
             0x84: "心跳",
+            0x85: "条码支付(付款码)",
         }
         cmd_name = cmd_names.get(cmd, "未知命令")
         # 完整帧hex
@@ -1029,6 +1213,26 @@ class AlipaySandbox_Widget(QWidget):
                 frame = self._build_frame(0x04, bytes([0x01]))
                 self.serial_conn.write(frame)
                 self._log(f"  已回复心跳")
+
+        elif cmd == 0x85:
+            # 设备扫描用户付款码: data = 付款码数字(ASCII) + [0x00 + 金额(ASCII)] + [0x00 + 商品名称(UTF-8)]
+            try:
+                parts = data.split(b'\x00')
+                auth_code = parts[0].decode('ascii').strip()
+                amount = parts[1].decode('ascii').strip() if len(parts) > 1 else None
+                subject = parts[2].decode('utf-8').strip() if len(parts) > 2 else None
+                self._log(f"  解析: 付款码={auth_code}, 金额={amount}, 商品={subject}")
+                # 填入UI
+                self.auth_code_lineedit.setText(auth_code)
+                if amount:
+                    self.barcode_amount_lineedit.setText(amount)
+                if subject:
+                    self.barcode_subject_lineedit.setText(subject)
+                self.barcode_trade_lineedit.clear()
+                # 自动发起条码支付
+                self._barcode_pay()
+            except (ValueError, UnicodeDecodeError, IndexError) as e:
+                self._log(f"  付款码解析失败: {str(e)}")
 
         else:
             self._log(f"  未知请求: CMD=0x{cmd:02X}")
