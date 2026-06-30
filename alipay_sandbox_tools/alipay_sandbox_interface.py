@@ -1167,7 +1167,7 @@ class AlipaySandbox_Widget(QWidget):
         self._log(f"  原始帧: {hex_str}")
         if data:
             try:
-                text = data.decode('utf-8')
+                text = data.replace(b'\x00', b'|').decode('utf-8', errors='replace')
                 self._log(f"  数据(文本): {text}")
             except UnicodeDecodeError:
                 pass
